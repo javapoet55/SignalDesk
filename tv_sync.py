@@ -832,7 +832,7 @@ class TVSync:
                "TradingView watchlists, so they're ready when you open TradingView.</div>", flash]
         if not self.enabled:
             out.append("<div class='warn'>Sync is turned off (TRADINGVIEW_SYNC=off in Railway → Variables).</div>")
-        card = ["<div class='card'>"]
+        card = ["<div class='card' id='tv-connection'>"]
         if info["connected"]:
             card.append(f"<div class='v ok'>Connected</div><div class='muted'>Since {e(self._local(info['connected_utc']))}"
                         "</div><div class='forms'>"
@@ -853,10 +853,10 @@ class TVSync:
         if self.dated:
             rows = sorted(((h.get("key", ""), h) for h in s["history"]),
                           key=lambda kv: (str(kv[1].get("source", ""))[:17], kv[0] != "scan"), reverse=True)[:60]
-            out.append("<h2>Your FinViz lists in TradingView</h2>")
+            out.append("<h2 id='tv-lists'>Your FinViz lists in TradingView</h2>")
         else:
             rows = sorted(s["lists"].items(), key=lambda kv: (kv[0] != "scan", kv[1].get("name", "")))
-            out.append("<h2>Watchlists kept up to date</h2>")
+            out.append("<h2 id='tv-lists'>Watchlists kept up to date</h2>")
         if rows:
             out.append("<div class='card wrap'><table><thead><tr><th>Watchlist</th><th class='n'>Symbols</th>"
                        "<th>From</th><th>Updated</th></tr></thead><tbody>")
@@ -875,7 +875,7 @@ class TVSync:
         else:
             out.append("<p class='muted'>None yet. They appear after the first sync.</p>")
         out.append(
-            "<div class='card'><div class='v'>How it works</div><ul class='muted' style='margin:6px 0 0 18px;padding:0'>"
+            "<div class='card' id='tv-sync'><div class='v'>How it works</div><ul class='muted' style='margin:6px 0 0 18px;padding:0'>"
             f"<li><b>{e(self.scan_name)}</b> gets every ticker from a scan.</li>"
             f"<li><b>{e(self.buy_prefix)}&lt;strategy&gt;</b> gets that strategy's BUY tickers from a run "
             "(an empty list means no BUY signals that run).</li>"

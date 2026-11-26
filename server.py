@@ -72,6 +72,7 @@ import journal as jn  # noqa: E402  Journal tab (your trades, imports, stats)
 import journal_chart as jc
 import trading_notes as tn
 import notebook as nb
+import portal_workspace as studio
 import open_trade_marks as otm  # noqa: E402  interactive journal performance explorer
 import email.parser  # noqa: E402
 import email.policy  # noqa: E402
@@ -802,17 +803,11 @@ def account_controls() -> str:
 
 
 def render_tabs(active: str) -> str:
-    return ("<div class='app-nav'><nav class='tabs'>" + "".join(
-        f"<a href='{href}' class='{'on' if key == active else ''}'>{label}</a>" for key, href, label in TABS)
-        + "</nav>" + account_controls() + "</div>")
+    return studio.shell(TABS, active, account_controls())
 
 
 def report_nav_bar() -> bytes:
-    """Small bar injected at the top of served report pages, linking back to the app tabs."""
-    return ("<div class='report-nav'><nav><a href='/'>← Scans</a>"
-            "<a href='/strategies'>Strategies</a><a href='/paper'>Paper Trading</a><a href='/journal'>Journal</a>"
-            "<a href='/latest/report.html' aria-current='page'>Latest report</a><a href='/notes'>Trading Notes</a></nav>"
-            + theme_control() + "</div>").encode("utf-8")
+    return render_tabs("report").encode("utf-8")
 
 
 REPORT_TICKER_VIEWS = r"""<script id="report-ticker-views">
@@ -875,9 +870,16 @@ padding:7px 11px;border-radius:7px;cursor:pointer}
 """
     body = re.sub(rb"(<a href='https://finviz[.]com/quote[.]ashx[?]t=([A-Z0-9.%\-]+)'[^>]*>[^<]+</a>)",
                   lambda m: m[1] + b" <a class='report-note' href='/notes?new=1&amp;symbol=" + m[2] + b"'>Note</a>", body)
+    report_sections = []
+    for anchor, label, heading in (("report-summary", "Summary", b"Summary "), ("report-overlap", "Screen overlap", b"In more than one screen"), ("report-ranked", "Ranked tickers", b"Top ")):
+        prefix = b"<h2>" + heading
+        if prefix in body:
+            body = body.replace(prefix, f"<h2 id='{anchor}'>".encode() + heading, 1)
+            report_sections.append((anchor, label))
+    section_bar = studio.section_links("Latest report", report_sections).encode() if report_sections else b""
     head = (_THEME_INIT + "<style>" + palette + style + "</style>").encode("utf-8")
     return body.replace(b"</head>", head + b"</head>", 1).replace(
-        b"<body>", b"<body class='journal-app'>" + report_nav_bar(), 1)
+        b"<body>", b"<body class='journal-app'>" + report_nav_bar(), 1).replace(b"<main>", b"<main>" + section_bar, 1)
 
 
 
@@ -1014,7 +1016,8 @@ def render_notes(app, query, submitted=None, error=""):
     return ("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>Trading Notes · Signal desk</title>" + _THEME_INIT
             + f"<style>{_CSS}{_JOURNAL_DESIGN_CSS}</style></head><body class='journal-app'><main>"
-            + render_tabs("notes") + content + "</main></body></html>")
+            + render_tabs("notes") + studio.section_links("Trading Notes", (("note-search", "Notebook"), ("symbol", "Trade plan"), ("thesis", "Thesis")))
+            + content + "</main></body></html>")
 
 
 def render_dashboard(app: App, notice: str = "") -> str:
@@ -1032,6 +1035,7 @@ def render_dashboard(app: App, notice: str = "") -> str:
         "<noscript><meta http-equiv='refresh' content='10'></noscript>" if running else "",
         _THEME_INIT + f"<style>{_CSS}{_STRAT_CSS}{_JOURNAL_DESIGN_CSS}{_DASHBOARD_THEME_CSS}</style></head><body class='journal-app dashboard-app'><main>",
         render_tabs("scans"),
+        studio.section_links("Scans", (("scan", "Run scan"), ("presets", "Presets"), ("scan-history", "Run history"))),
         "<h1>FinViz screener gainers</h1>",
         f"<div class='muted'>Scheduled scans: {e(scan_schedule_summary(app))}</div>",
     ]
@@ -1081,7 +1085,7 @@ def render_dashboard(app: App, notice: str = "") -> str:
 
     out.append(render_presets(app))
 
-    out.append("<h2>All runs</h2>")
+    out.append("<h2 id='scan-history'>All runs</h2>")
     if not runs:
         out.append("<p class='muted'>No runs yet. They will appear here after the next scheduled run, "
                    "or use Run a scan above.</p>")
@@ -1351,13 +1355,20 @@ def render_strategies(app: App) -> str:
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Strategies</title>",
         _THEME_INIT + f"<style>{_CSS}{_STRAT_CSS}{_JOURNAL_DESIGN_CSS}{_DASHBOARD_THEME_CSS}{_STRATEGIES_THEME_CSS}</style></head><body class='journal-app dashboard-app strategies-app'><main>", render_tabs("strategies"),
-        "<h1>Strategies</h1>",
-        "<div class='muted'>Select strategies, then run them together on the same scan.</div>",
-        "<p><a href='/strategies/archive'>Recycle bin &amp; version history →</a></p>",
+        studio.subnav(), "<div class='studio-page'><h1 id='studio-title'>Strategy Library</h1>",
     ]
-    if os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
-        out.append("<p><a href='/strategies/backtests'>VectorBT PRO backtest history</a></p>")
-
+    jobs = app.schedules.jobs("strategies") if app.schedules else []
+    upcoming = [j for j in jobs if j["status"] == "scheduled"]
+    missed = [j for j in jobs if j["status"] == "missed"]
+    results = st.results(50)  # Recent archive window used by the original dashboard.
+    last_by_name = {}
+    for record in results:
+        last_by_name.setdefault(record.get("strategy"), record)
+    out.append("<div class='studio-stats' data-panel='library'>"
+               f"<div>Strategies<strong>{len(strategies)}</strong></div>"
+               f"<div>Time schedules<strong>{len(upcoming)}</strong></div>"
+               f"<div>After-scan strategies<strong>{len(auto['names'])}</strong></div>"
+               f"<div>Successful runs (latest {len(results)})<strong>{sum(r.get('status') == 'ok' for r in results)}</strong></div></div>")
     if st.price_source == "massive" and st.client is None:
         out.append("<div class='warn'>MASSIVE_API_KEY is not set, so there are no prices to run strategies on.</div>")
     if st.price_source == "finviz" and st.finviz is None:
@@ -1382,7 +1393,7 @@ def render_strategies(app: App) -> str:
     )
     out.append("<form id='go' method='post' action='/strategies/go'>")
     out.append(
-        "<div class='card top2'>"
+        "<div class='card top2' data-panel='configure'><h2>Scan &amp; data settings</h2>"
         f"<label>Ticker source<select name='scan'>{opt(scan_opts, sel_scan)}</select></label>"
         "<label>Price basis<select name='mode'>"
         + opt([("close", "Latest close"), ("intraday", "Include today's intraday bar")], sel_mode)
@@ -1396,7 +1407,7 @@ def render_strategies(app: App) -> str:
           "Market cap is in millions (1,000 = $1 billion). Missing values are excluded when a filter is set.</small>"
           "</fieldset></div>")
 
-    out.append("<div class='card slist'><div class='shead'><div><span class='v'>Your strategies</span> "
+    out.append("<div class='studio-actions' data-panel='library'><label class='studio-search'>Find a strategy<input type='search' id='strategy-search' placeholder='Name, filename or type'></label><button type='button' onclick=\"document.getElementById('upfile').click()\">Upload strategy</button></div><div class='card slist' data-panel='library'><div class='shead'><div><span class='v'>Your strategies</span> "
                f"<span class='muted'>{len(strategies)}</span></div>"
                + ("<label class='inline' style='display:flex;gap:8px;align-items:center'>"
                   "<input type='checkbox' id='all' style='width:18px;height:18px;accent-color:var(--accent)'>"
@@ -1405,11 +1416,13 @@ def render_strategies(app: App) -> str:
         out.append("<p class='muted' style='padding:0 16px'>No strategies yet. Use Upload strategy below.</p>")
     for name, m in strategies:
         kind = {"v5": "V5-style", "script": "Script"}.get(m.get("kind"), "Custom")
+        last = last_by_name.get(name, {})
+        recent = (_fmt_short(last.get("started_utc"), s.tz) + " · " + _counts_text(last.get("counts", {}))) if last else ""
         on = name in chosen
         out.append(
             f"<label class='srow{' on' if on else ''}'>"
             f"<input type='checkbox' name='s' value='{e(name, quote=True)}'{' checked' if on else ''}>"
-            f"<span class='nm'><div class='t1'>{e(_pretty_name(name))}</div><div class='t2'>{e(m['file'])}</div></span>"
+            f"<span class='nm'><div class='t1'>{e(_pretty_name(name))}</div><div class='t2'>{e(m['file'])}</div><small>{e(recent)}</small></span>"
             + ("<span class='tag'>auto</span>" if name in auto["names"] else "")
             + f"<span class='tag'>{kind}</span>"
             + _tv_controls(name, m)
@@ -1424,9 +1437,14 @@ def render_strategies(app: App) -> str:
               f"data-label='{e(_pretty_name(name), quote=True)}' aria-label='Delete {e(_pretty_name(name), quote=True)}'>"
               "<svg width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' aria-hidden='true'>"
               "<path d='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'/></svg></button></label>")
+    out.append("</div><div class='studio-actions' data-panel='library'><span id='library-count'></span>"
+               "<a class='btn2' href='/strategies?tab=configure' data-workspace-tab='configure'>Continue to Run Configuration →</a></div>")
+    if not strategies:
+        out.append("<p data-panel='configure scheduled'>Upload a strategy in the Strategy Library to configure a run.</p>")
     if strategies:
         out.append(
-            f"<div class='selbar'><div class='cnt' id='cnt'>{len(chosen)} of {len(strategies)} selected</div>"
+            "<div class='selbar' data-panel='configure scheduled'><h2 id='preview-title'>Run preview</h2><p class='studio-preview' id='run-preview'></p>"
+            f"<div class='cnt' id='cnt'>{len(chosen)} of {len(strategies)} selected</div>"
             "<div class='muted' style='font-size:13px'>Shared scan and prices apply to every selection.</div>"
             "<div class='when'>"
             "<label>Run schedule<select name='when' id='when'>"
@@ -1443,15 +1461,13 @@ def render_strategies(app: App) -> str:
             f"<span class='tz' id='tz'>{e(_tz_label(s.tz, default_at))}</span>"
             "<span class='go'><button type='submit' id='gobtn'>Run strategies</button></span></div>"
             "<div class='muted' id='sum' style='font-size:13px;margin-top:8px'></div></div>")
-    out.append("</div>")
-    out.append("<div class='under'>"
+    out.append("<div class='under' data-panel='scheduled'>"
                "<label><input type='checkbox' name='auto' id='auto'"
                + (" checked" if auto["names"] else "") + "> Run selected strategies after each new scan</label>"
                "<button type='submit' class='vis' id='autobtn' formaction='/strategies/autoset'>Save</button>"
-               "<label class='btn2' style='border:1px solid var(--line);border-radius:8px;padding:7px 12px;"
-               "cursor:pointer;font-weight:600' for='upfile'>Upload strategy</label></div>")
+               "</div>")
     if auto["names"]:
-        out.append(f"<div class='muted' style='font-size:13px;margin:-6px 0 10px'>After each new scan: "
+        out.append(f"<div class='muted' data-panel='scheduled' style='font-size:13px'>After each new scan: "
                    f"{e(', '.join(_pretty_name(n) for n in auto['names']))} "
                    f"({'intraday' if auto['mode'] == 'intraday' else 'latest close'}"
                    + (f", {e(sm.candles_label(auto['candles']))} candles" if auto.get("candles", "1d") != "1d" else "")
@@ -1483,12 +1499,9 @@ def render_strategies(app: App) -> str:
 
     # ── run activity ──
     cur, queued = st.current, list(st.queued)
-    jobs = app.schedules.jobs("strategies") if app.schedules else []
-    upcoming = [j for j in jobs if j["status"] == "scheduled"]
-    missed = [j for j in jobs if j["status"] == "missed"]
     status = (f"Running {_pretty_name(cur['name'])}" + (f" · {len(queued)} queued" if queued else "")
               if cur else (f"{len(queued)} queued" if queued else "Idle · no strategies queued"))
-    out.append(f"<div class='card act' id='activity'><div class='shead'><span class='v'>Run activity</span>"
+    out.append(f"<div class='card act' id='activity' data-panel='history'><div class='shead'><span class='v'>Run activity</span>"
                f"<span class='muted' style='font-size:13px'>{e(status)}</span></div>" + _flash_html(app, "results"))
     if cur or queued:
         out.append("<h3>Now</h3>")
@@ -1498,21 +1511,39 @@ def render_strategies(app: App) -> str:
                        + _cancel_strategy_button(cur.get('job_id', ''), 'Stopping…' if cur.get('stopping') else 'Stop', bool(cur.get('stopping'))) + "</div>")
         for q in queued:
             out.append(f"<div class='line'><span>{e(_pretty_name(q['name']))} · queued ({e(q['reason'])})</span></div>")
+    next_due = min((app.schedules.next_fire(j) for j in upcoming), default=None)
+    next_text = next_due.astimezone(s.tz).strftime("%a %b %d, %H:%M %Z") if next_due else "None scheduled"
+    out.append("</div><section data-panel='scheduled' class='studio-stats'>"
+               f"<div>Active schedules<strong>{len(upcoming)}</strong></div>"
+               f"<div>Next run<strong>{e(next_text)}</strong></div>"
+               f"<div>Missed schedules<strong>{len(missed)}</strong></div></section>"
+               "<section class='card' data-panel='scheduled'><h2>Time schedules</h2>"
+               f"<p>{len(upcoming)} active · {len(missed)} missed · {e(s.tz_name)}</p>"
+               "<div class='studio-actions'><button type='button' id='schedule-toggle' aria-expanded='false'>Create schedule</button>"
+               "<a href='/strategies?tab=library' data-workspace-tab='library'>Select strategies</a></div>"
+               "<label class='studio-search'>Find a schedule<input id='schedule-search' type='search'></label>")
+    if not (upcoming or missed):
+        out.append("<p class='muted'>No time schedules.</p>")
     if upcoming or missed:
-        out.append("<h3>Scheduled</h3>")
+        out.append("<div class='wrap'><table><thead><tr><th>Strategies</th><th>Source &amp; schedule</th>"
+                   "<th>Status</th><th>Action</th></tr></thead><tbody>")
         for j in upcoming + missed:
             label = "Cancel" if j["status"] == "scheduled" else "Dismiss"
             extra = " · <span class='bad'>missed (server was offline)</span>" if j["status"] == "missed" else ""
             names_txt = ", ".join(_pretty_name(n) for n in j["names"])
             out.append(
-                f"<div class='line'><span>{e(_job_text(app, j))}{extra}<div class='muted' style='font-size:13px'>"
-                f"{e(names_txt)}</div></span>"
+                f"<tr><td>{e(names_txt)}</td><td>{e(_job_text(app, j))}</td><td>{e(j['status'])}{extra}</td><td>"
                 "<form method='post' action='/strategies/schedule/cancel' style='margin:0'>"
                 f"<input type='hidden' name='id' value='{e(j['id'], quote=True)}'>"
-                f"<button type='submit' class='ghost'>{label}</button></form></div>")
-    results = st.results(50)
+                f"<button type='submit' class='ghost'>{label}</button></form></td></tr>")
+        out.append("</tbody></table></div>")
+    out.append("</section><section class='card' data-panel='history'><h2>Recent run results</h2>"
+               "<label class='studio-search'>Filter recent runs<input id='history-search' type='search' placeholder='Strategy, date or status'></label>")
     if results:
-        out.append("<h3>Results</h3><div class='wrap'><table><thead><tr><th>Started</th><th>Strategy</th><th>Scan</th>"
+        successful = sum(r.get("status") == "ok" for r in results)
+        failed = sum(r.get("status") == "error" for r in results)
+        out.append(f"<p>{len(results)} recent runs · {successful} successful · {failed} failed</p>")
+        out.append("<div class='wrap'><table><thead><tr><th>Started</th><th>Strategy</th><th>Scan</th>"
                    "<th>As of</th><th>Prices</th><th>Status</th><th>Signals</th><th></th></tr></thead><tbody>")
         for m in results:
             rid, status_r = m.get("id", ""), m.get("status", "")
@@ -1530,20 +1561,21 @@ def render_strategies(app: App) -> str:
                 + (f"<div class='muted' style='font-size:12px'>{e(_candles_text(m.get('candles')))} candles</div>"
                    if (m.get('candles') or '1d') != '1d' else "") + "</td>"
                 f"<td class='{cls}'>{e(status_r)}</td><td>{e(_counts_text(m.get('counts', {})))}</td>"
-                f"<td class='links'><a href='/strategies/results/{e(rid)}/'>View</a>"
+                f"<td class='links'><button type='button' data-run-details>Summary</button><a href='/strategies/results/{e(rid)}/'>View</a>"
                 f"<a href='/strategies/results/{e(rid)}/signals.csv'>CSV</a>"
                 f"<a href='/strategies/results/{e(rid)}/{SIGNAL_TXT}' title='Signal tickers, comma-separated'>"
                 "TXT</a>" + (_cancel_strategy_button(rid, "Stop") if status_r == "running" else _delete_run_button(rid)) + "</td></tr>")
-        out.append("</tbody></table></div>")
-    elif not (cur or queued or upcoming or missed):
+        out.append("</tbody></table></div><div class='studio-actions'><button type='button' id='previous-page'>Previous</button>"
+                   "<span id='page-summary' aria-live='polite'></span><button type='button' id='next-page'>Next</button></div>")
+    else:
         out.append("<p class='muted'>Your selected strategies will appear here when you start a run.</p>")
-    out.append("</div>")
+    out.append("</section>")
 
     # ── data & configuration ──
     days = st.prices.trading_days()
     ps = st.prices.status
     data_flash = _flash_html(app, "data")
-    out.append(f"<details id='data' class='card'{' open' if data_flash else ''}><summary class='v' "
+    out.append(f"<details id='data' data-panel='settings' class='card'{' open' if data_flash else ''}><summary class='v' "
                "style='color:var(--ink)'>Data &amp; configuration</summary>" + data_flash)
     out.append(
         "<div class='card'><div class='v'>Daily prices (FinViz Elite)</div>"
@@ -1589,7 +1621,9 @@ def render_strategies(app: App) -> str:
     out.append(f"<div class='muted' style='font-size:13px'>Scan schedule: {e(scan_schedule_summary(app))} "
                "(change it on the <a href='/#scan'>Scans</a> tab). Time zone for "
                f"scheduled runs: {e(s.tz_name)}.</div></details>")
-    out.append("<p class='muted'>Information only, not investment advice.</p></main>")
+    out.append("<section class='card' data-panel='settings'><h2>Strategy recovery</h2><div class='studio-actions'><a href='/strategies/archive#versions'>Version history</a><a href='/strategies/archive#trash'>Recycle bin</a></div></section>"
+               "</div><p class='muted'>Information only, not investment advice.</p></main>")
+    out.append("<script>" + studio.SCRIPT + "</script>")
     out.append("<script>(function(){" + _STRAT_JS.replace("__TZ__", json.dumps(s.tz_name))
                .replace("__BUSY__", "true" if busy else "false") + "})();</script></body></html>")
     return "\n".join(x for x in out if x)
@@ -1932,11 +1966,8 @@ def render_result(app: App, rid: str) -> Optional[str]:
         f"<title>{e(title)} · Signal desk</title>",
         "<meta http-equiv='refresh' content='5'>" if running else "",
         _THEME_INIT + f"<style>{_CSS}{_RESULT_CSS}</style></head><body class='rp'>",
-        "<header class='topbar'><div class='tb-in'><a class='brand' href='/strategies'><span aria-hidden='true'>◆</span>"
-        " Signal desk</a><nav aria-label='Main'><a href='/'>Scans</a><a class='on' href='/strategies' "
-        f"aria-current='page'>Strategies</a><a href='/paper?research={e(rid)}'>Paper Trading</a><a href='/journal'>Journal</a><a href='/latest/report.html'>Latest report</a></nav>"
-        + account_controls() + "</div></header>",
-        "<main class='rmain'>",
+        "<main class='rmain'>", render_tabs("strategies"), studio.subnav("history"),
+        f"<p><a href='/paper?research={e(rid)}'>Open in Paper Trading</a></p>",
         "<div class='crumb'><a href='/strategies#activity'>Strategies</a> / Scan results</div>",
         f"<div class='titlerow'><h1>{e(title)}</h1><span class='pill {pill[0]}'><span class='dot'></span>"
         f"{e(pill[1])}</span>"
@@ -2253,14 +2284,14 @@ def render_archive(app: App) -> str:
     out = ["<!doctype html><html lang='en'><head><meta charset='utf-8'>",
            "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Strategy recovery · Signal desk</title>",
            _THEME_INIT + f"<style>{_CSS}{_STRAT_CSS}{_JOURNAL_DESIGN_CSS}{_DASHBOARD_THEME_CSS}{_STRATEGIES_THEME_CSS}</style></head><body class='journal-app dashboard-app strategies-app'><main>", render_tabs("strategies"),
-           "<p><a href='/strategies'>← Strategies</a></p><h1>Recycle bin &amp; version history</h1>",
+           studio.subnav("settings"), "<h1>Recycle bin &amp; version history</h1>",
            "<p class='muted'>Restore requires a fresh email OTP. All past scan results stay available.</p>"]
     out.append(_flash_html(app, "archive"))
     for bucket, title, description in (
         ("trash", "Recycle bin", "Deleted strategies are recoverable for 30 days, then automatically removed. Restoring never overwrites an existing strategy."),
         ("versions", "Version history", "Each replacement saves the previous version. Versions have no automatic expiry. Restoring a version also preserves the current one.")):
         rows = st.archive_entries(bucket)
-        out.append(f"<h2>{title}</h2><p class='muted'>{description}</p><div class='card'>")
+        out.append(f"<h2 id='{bucket}'>{title}</h2><p class='muted'>{description}</p><div class='card'>")
         if not rows:
             out.append("<p class='muted'>No deleted strategies.</p>" if bucket == "trash" else
                        "<p class='muted'>No saved versions yet. The next replacement will save the current strategy.</p>")
@@ -2504,7 +2535,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
         if ctype.startswith("text/html"):
-            self.send_header("Content-Security-Policy", self.CSP)
+            policy = self.CSP
+            if urllib.parse.urlsplit(self.path).path == "/strategies":
+                policy += "; connect-src 'self'"
+            self.send_header("Content-Security-Policy", policy)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -2738,7 +2772,7 @@ class Handler(BaseHTTPRequestHandler):
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
                 "<title>TradingView · FinViz Agent</title>" + str(g.get("_THEME_INIT", ""))
                 + "<style>" + str(g.get("_CSS", "")) + str(g.get("_STRAT_CSS", "")) + str(g.get("_JOURNAL_DESIGN_CSS", "")) + "</style></head><body class='journal-app'><main>"
-                + tabs + "<p><a href='/strategies'>← Strategies</a></p>" + tv.page_body()
+                + tabs + studio.section_links("TradingView", (("tv-connection", "Connection"), ("tv-lists", "Watchlists"), ("tv-sync", "Sync rules"))) + tv.page_body()
                 + "<p class='muted'>Information only, not investment advice.</p></main></body></html>")
         self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -2808,17 +2842,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._journal_get(path, parts.query)
         st = self.app.strategies
         if st is not None:
-            if path == "/strategies/backtests" and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
-                try:
-                    jobs = backtests.service("/jobs")
-                except ValueError as exc:
-                    return self._text(503, str(exc))
-                links = "".join(f"<li><a href='/strategies/backtests/{html.escape(j['id'])}'>"
-                                f"{html.escape(j['strategy'])} · {html.escape(j['symbol'])}</a> · "
-                                f"{html.escape(j['status'])} · {html.escape(j['created'])}</li>" for j in jobs)
-                return self._html(200, "<!doctype html><meta charset='utf-8'><title>Backtest history</title>"
-                                  "<main><a href='/strategies'>Strategies</a><h1>VectorBT PRO backtests</h1>"
-                                  "<p>Open a completed daily strategy result to start a backtest.</p><ul>"+links+"</ul></main>")
+            if path == "/strategies/backtests":
+                jobs = []
+                message = "VectorBT PRO is unavailable. The backtest service is not configured."
+                if os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+                    try:
+                        jobs = backtests.service("/jobs")
+                        message = "" if jobs else "No historical simulations yet."
+                    except ValueError:
+                        message = "The backtest service is unavailable. Refresh to retry."
+                rows = "".join(f"<tr><td><a href='/strategies/backtests/{html.escape(j['id'])}'>"
+                               f"{html.escape(j['strategy'])}</a></td><td>{html.escape(j['symbol'])}</td>"
+                               f"<td>{html.escape(j['status'])}</td><td>{html.escape(j['created'])}</td></tr>" for j in jobs)
+                return self._html(200, "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+                                  "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Backtest history</title>"
+                                  + _THEME_INIT + f"<style>{_CSS}{_JOURNAL_DESIGN_CSS}</style></head><body class='journal-app'><main>"
+                                  + render_tabs("strategies") + studio.subnav("backtests") + "<h1>VectorBT PRO</h1>"
+                                  "<p>Historical simulations · <a href='/strategies?tab=history'>Choose a strategy run to backtest</a></p>"
+                                  "<div class='card wrap'>" + (message or "<table><thead><tr><th>Strategy</th><th>Symbols</th>"
+                                  "<th>Status</th><th>Created</th></tr></thead><tbody>" + rows + "</tbody></table>") + "</div></main></body></html>")
             research = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})/copilot", path)
             if research and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
                 query = urllib.parse.parse_qs(parts.query)
@@ -3014,6 +3056,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- journal ------------------------------------------------------------
     def _html(self, status: int, page: str) -> None:
+        if self.path.startswith("/strategies/backtests/") and "<main>" in page:
+            page = page.replace("</head>", _THEME_INIT + "</head>", 1).replace(
+                "<main>", "<main>" + render_tabs("strategies") + studio.subnav("backtests"), 1)
         self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def _journal_get(self, path: str, query: str) -> None:

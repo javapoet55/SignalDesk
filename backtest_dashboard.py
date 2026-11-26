@@ -9,6 +9,9 @@ from datetime import date
 CAPITAL = 100000
 CSS = """
 :root{color-scheme:dark;--bg:#0a1019;--panel:#121d2c;--edge:#293649;--text:#e6eef6;--muted:#a5b4c5;--green:#61dcac;--red:#ff897f;--gold:#e7be75}
+:root[data-theme=light]{color-scheme:light;--bg:#f4f7f7;--panel:white;--edge:#cfdddf;--text:#142c33;--muted:#4a626a;--green:#14775b;--red:#ab3b46;--gold:#85601d}
+:root[data-theme=light] main a{color:#146653}:root[data-theme=light] tbody tr:hover{background:#e7f2ee}
+:root[data-theme=light] .notice{color:#815c1c}:root[data-theme=light] .switch a[aria-current]{color:white}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,sans-serif;font-variant-numeric:tabular-nums}main{max-width:1480px;margin:auto;padding:26px clamp(14px,3vw,48px) 60px}
 nav,.top,.legend,.switch,.strip{display:flex;align-items:center;gap:16px;flex-wrap:wrap}nav{font-size:13px;padding-bottom:20px;border-bottom:1px solid var(--edge)}a{color:#a6d9ef;text-decoration:none}a:hover{text-decoration:underline}a:focus-visible,summary:focus-visible{outline:2px solid var(--gold)}
 .top{justify-content:space-between;margin:24px 0}.top h1{font-size:clamp(26px,3vw,42px);letter-spacing:-.045em;line-height:1.1;margin:4px 0 8px}.muted,small,.legend,footer{color:var(--muted)}.meta{text-align:right}.strip{gap:0;margin:18px 0}.strip div{padding:0 24px;border-left:1px solid var(--edge)}.strip div:first-child{padding-left:0;border:0}.strip b{display:block;font-size:21px}
