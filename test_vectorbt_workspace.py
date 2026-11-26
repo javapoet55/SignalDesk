@@ -98,6 +98,9 @@ class WorkspaceFlow(unittest.TestCase):
                 VBT_SERVICE_TOKEN="fixture",
             ),
             patch("backtests.service", side_effect=service),
+            patch("dow_benchmark._download", return_value={d: 50000 + i * 125 for i, d in enumerate(days)}),
+            patch("dow_benchmark._refresh_at", 0.0),
+            patch("dow_benchmark._closes", {}),
             sync_playwright() as pw,
         ):
             browser = pw.chromium.launch(channel="chrome")
@@ -114,9 +117,28 @@ class WorkspaceFlow(unittest.TestCase):
             page.locator(".studio-rail").get_by_text("VectorBT PRO").click()
             self.assertEqual(page.locator("svg.vb-plot").count(), 2)
             self.assertEqual(page.locator(".vb-kpi").count(), 5)
+            self.assertEqual(page.locator("svg.vb-plot").first.locator("polyline").count(), 3)
+            self.assertEqual(page.get_by_role("link", name="Dow Jones (DJIA)").count(), 1)
+            self.assertEqual(page.get_by_label("Hold (trading days)").input_value(), "1")
+            page.get_by_label("Hold (trading days)").fill("5")
             page.get_by_role("button", name="Run Backtest").click()
             page.wait_for_url("**/vectorbt?job=*")
+            self.assertEqual(submitted[0]["holds"], [5])
             self.assertEqual(submitted[0]["fee_bps"], 10)
+            for group, title in (("all", "total"), ("wins", "winning"), ("losses", "losing")):
+                with page.expect_popup() as opened:
+                    page.get_by_role("link", name=f"View {title} trades as text").click()
+                popup = opened.value
+                popup.wait_for_load_state()
+                self.assertIn(f"trades={group}", popup.url)
+                listing = popup.locator("body").inner_text()
+                if group == "losses":
+                    self.assertIn("No closed trades", listing)
+                else:
+                    self.assertIn("ABC", listing)
+                    self.assertIn(days[1], listing)
+                    self.assertIn(days[2], listing)
+                popup.close()
             self.assertEqual(submitted[0]["bars"][0]["signal"], True)
             page.get_by_text("YTD", exact=True).click()
             self.assertIn("window=YTD", page.url)
@@ -152,8 +174,8 @@ class WorkspaceFlow(unittest.TestCase):
             page.locator(".vb-dates summary").click()
             page.get_by_label("Historical start").fill("2026-10-01")
             page.get_by_label("Historical end").fill("2026-10-09")
-            page.get_by_label("Holding periods (sessions)").fill("2,4")
             page.locator(".vb-dates summary").click()
+            page.get_by_label("Hold (trading days)").fill("2,4")
             with patch(
                 "backtests.calendar_replay",
                 return_value=(submitted[0]["bars"][:7], "fixture"),

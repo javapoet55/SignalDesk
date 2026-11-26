@@ -183,6 +183,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         return "".join(out) + "</main></body></html>"
     batch = "outcomes" in result
     rows = []
+    row_pnl = []
     fills = []
     benchmark = None
     extra = ""
@@ -203,6 +204,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             buy, sell = quotes[0], quotes[idx + 1]
             complete = isinstance(v, (float, int))
             pnl = allocation * v / 100 if complete else None
+            row_pnl.append(pnl)
             if complete:
                 fills.append(dict(pnl=pnl, hold=hold))
             rows.append(
@@ -257,6 +259,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         hold = full["hold"]
         benchmark = full.get("benchmark")
         for t in fills:
+            row_pnl.append(t["pnl"])
             rows.append(
                 [
                     t.get("symbol", info["symbol"]),
@@ -345,7 +348,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     if metrics_only:
         return dict(days=days, equity=equity, benchmark=benchmark, drawdown=dd, hold=hold,
                     start=start, end=end, total=total, sharpe=sharpe, maxdd=maxdd, rate=rate,
-                    annual=annual, trades=n, wins=len(wins), losses=len(losses), rows=rows,
+                    annual=annual, trades=n, wins=len(wins), losses=len(losses), rows=rows, row_pnl=row_pnl,
                     avg_win=mean(wins), avg_loss=mean(losses), expectancy=mean(pnl),
                     profit_factor=(sum(wins) / -sum(losses) if losses else math.inf if wins else None),
                     avg_hold=mean([t["hold"] for t in fills]))

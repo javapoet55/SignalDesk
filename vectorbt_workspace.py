@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from urllib.parse import urlencode
 
 import backtests
+import dow_benchmark
 import strategies as sm
 from backtest_dashboard import CAPITAL, fmt, result_html
 from backtest_dashboard import e as esc
@@ -49,7 +50,10 @@ def submit(st, fields, buys):
     fee = (
         float(fields.get("commission", "0")) * 100
     )  # Portal percent to engine basis points.
-    holds = [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
+    try:
+        holds = [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
+    except ValueError:
+        raise ValueError("Enter a holding period in whole trading days, or a comma-separated list to compare.") from None
     symbols = list(
         dict.fromkeys(
             s.strip().upper() for s in fields.get("symbols", "").split(",") if s.strip()
@@ -158,13 +162,47 @@ def export(kind, info, m):
     return output.getvalue()
 
 
-def plot(days, values, benchmark=None, *, draw=False, compact=False):
+TRADE_GROUPS = {"all": "Total trades", "wins": "Winning trades", "losses": "Losing trades"}
+
+
+def trade_text(info, m, group):
+    rows = [
+        row
+        for row, pnl in zip(m["rows"], m["row_pnl"])
+        if pnl is not None
+        and (
+            group == "all"
+            or (group == "wins" and pnl > 0)
+            or (group == "losses" and pnl < 0)
+        )
+    ]
+    heading = (
+        f"{info['strategy']} · {TRADE_GROUPS[group]}\n"
+        f"{m['start']} through {m['end']} · Holding period {holding_label(m['hold'])}\n\n"
+    )
+    if not rows:
+        if m["trades"] and not m["rows"]:
+            return heading + "Individual fills were not saved for this backtest.\n"
+        return heading + "No closed trades match this list.\n"
+    return (
+        heading
+        + "\t".join(TRADE_HEADERS)
+        + "\n"
+        + "".join("\t".join(map(str, row)) + "\n" for row in rows)
+    )
+
+
+def holding_label(hold):
+    return f"{hold} trading day" + ("" if hold == 1 else "s")
+
+
+def plot(days, values, benchmark=None, *, dow=None, draw=False, compact=False):
     if not values:
         return "<p class='vb-empty'>Daily valuations will appear when prices are available.</p>"
     top, bottom, left, right = 14, (98 if draw else 186), 70, 807
     if compact:
         top, bottom, left, right = 9, 108, 4, 234
-    combined = list(values) + list(benchmark or []) + ([0] if draw else [])
+    combined = list(values) + list(benchmark or []) + list(dow or []) + ([0] if draw else [])
     lo, hi = min(combined), max(combined)
     if lo == hi:
         lo -= 1
@@ -199,7 +237,7 @@ def plot(days, values, benchmark=None, *, draw=False, compact=False):
     out.append(
         f"<polygon points='{left},{baseline} {pts} {x(len(values) - 1):.1f},{baseline}' fill='{color}' opacity='.16'/>"
     )
-    for series, stroke in ((benchmark, "var(--benchmark)"), (values, color)):
+    for series, stroke in ((benchmark, "var(--benchmark)"), (dow, "var(--dow)"), (values, color)):
         if series:
             out.append(
                 f"<polyline points='{points(series)}' fill='none' stroke='{stroke}' stroke-width='2.7'/>"
@@ -281,15 +319,21 @@ def report(job, key, m, window):
     basket_label = ", ".join(symbol_names[:6]) + (
         f" +{len(symbol_names) - 6}" if len(symbol_names) > 6 else ""
     )
-    legend = (
-        "<span class='vb-legend'>Strategy equity"
-        + ("　 ▬ Buy &amp; hold · " + esc(symbol) if benchmark else "")
-        + "</span>"
-    )
+    dow = dow_benchmark.equity(days, CAPITAL)
+    legend = "<span class='vb-legend'><span class='vb-key strategy'>Strategy equity</span>"
+    if benchmark:
+        legend += f"<span class='vb-key basket'>Buy &amp; hold · {esc(symbol)}</span>"
+    if dow:
+        legend += (f"<a class='vb-key dow' href='{dow_benchmark.SOURCE}' target='_blank' rel='noopener' "
+                   "title='DJIA daily closes from FRED, indexed to the starting capital'>Dow Jones (DJIA)</a>")
+    elif days:
+        legend += "<span>Dow Jones closes unavailable for this period</span>"
+    legend += "</span>"
     equity = plot(
         days[offset:],
         m.get("equity", [])[offset:],
         benchmark[offset:] if benchmark else None,
+        dow=dow[offset:],
     )
     dd = plot(days[offset:], m.get("drawdown", [])[offset:], draw=True)
     rows = stats(m)
@@ -303,11 +347,18 @@ def report(job, key, m, window):
             + "</dl>"
         )
 
+    def stat_value(label, value):
+        for group, name in TRADE_GROUPS.items():
+            if label == name and m:
+                return (f"<a class='vb-trade-count' aria-label='View {name.lower()} as text' "
+                        f"href='{view_url(key, hold=m['hold'], trades=group)}' target='_blank' rel='noopener'>{esc(value)}</a>")
+        return esc(value)
+
     def stat_table(pairs):
         return (
             "<table><thead><tr><th>Metric</th><th>Strategy</th></tr></thead><tbody>"
             + "".join(
-                f"<tr><td>{esc(label)}</td><td>{esc(value)}</td></tr>"
+                f"<tr><td>{esc(label)}</td><td>{stat_value(label, value)}</td></tr>"
                 for label, value in pairs
             )
             + "</tbody></table>"
@@ -317,11 +368,11 @@ def report(job, key, m, window):
         [
             ("Strategy", info.get("strategy", "—")),
             ("Symbols", basket_label or symbol),
-            ("Timeframe", "1 Day"),
+            ("Price bars", "Daily"),
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
             ("Commission", f"{info['fee_bps'] / 100:g}% per side" if info else "—"),
-            ("Holding period", f"{m['hold']} sessions" if m else "—"),
+            ("Holding period", holding_label(m["hold"]) if m else "—"),
             ("Signals", info.get("source", "—")),
             (
                 "Engine",
@@ -394,7 +445,10 @@ def controls(runs, rid, info, symbols, enabled, fields):
     start, end = fields.get("start", ""), fields.get("end", "")
     if not fields and info.get("source") == "Historical date-range replay":
         start, end = info.get("_start", ""), info.get("_end", "")
-    holds = fields.get("holds", ",".join(map(str, info.get("holds", [1, 5, 10]))))
+    holds = fields.get("holds")
+    if holds is None:
+        holds = str(info["_hold"]) if "_hold" in info else ",".join(map(str, info.get("holds", [1])))
+    presets = "".join(f"<option value='{h}'>{holding_label(h)}</option>" for h in (1, 2, 3, 5, 10, 20, 60))
     options = "".join(
         f"<label><input type='checkbox' value='{esc(v)}'>{esc(v)}</label>"
         for v in ["ALL", *symbols]
@@ -405,7 +459,10 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "<details class='vb-picker'><summary>Symbols<span id='vb-chips'></span></summary><div>"
         f"<label>Symbols<input name='symbols' aria-label='Symbols' value='{esc(value)}' required placeholder='ALL or comma-separated tickers'></label>"
         f"<div class='vb-options'>{options}</div></div></details>"
-        "<label>Timeframe<input readonly value='1 Day'></label><label>Initial Capital<input readonly value='$100,000'></label>"
+        f"<label>Hold (trading days)<input name='holds' list='vb-holds' value='{esc(holds)}' required "
+        "title='Enter one holding period, or comma-separated periods to compare'></label>"
+        f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
+        "<label>Initial Capital<input readonly value='$100,000'></label>"
         f"<label>Commission (%)<input name='commission' type='number' min='0' max='1' step='any' value='{esc(commission)}' required></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
@@ -417,9 +474,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         + esc(end)
         + "'></label>"
         "<small>Choose both dates to recalculate daily signals for the selected tickers. Leave dates blank to use saved signals.</small>"
-        "<label>Holding periods (sessions)<input name='holds' required value='"
-        + esc(holds)
-        + "'></label></div></details>"
+        "</div></details>"
         "<button class='vb-run' type='submit'"
         + ("" if runs and enabled else " disabled")
         + ">▶　Run Backtest</button></form>"
@@ -461,6 +516,12 @@ def page(host, query, fields=None, error=""):
     hold = query.get("hold", "")
     m = report_data(job, hold)
     info = dict(job["inputs"]) if job else {}
+    if "trades" in query:
+        group = query["trades"]
+        if not key or not m or group not in TRADE_GROUPS:
+            return host._text(400, "Select a trade count from a completed backtest.")
+        return host._send(200, trade_text(info, m, group).encode("utf-8"), "text/plain; charset=utf-8",
+                          {"Content-Disposition": f'inline; filename="backtest-{key}-{m["hold"]}-{group}.txt"'})
     if query.get("download"):
         kind = query["download"]
         if kind not in ("csv", "pdf") or not m:
@@ -479,7 +540,7 @@ def page(host, query, fields=None, error=""):
     symbols = server.signal_tickers(st.results_dir / rid) if rid else []
     defaults = info if rid == info.get("run") else {}
     if defaults and m:
-        defaults.update(_start=m["start"], _end=m["end"])
+        defaults.update(_start=m["start"], _end=m["end"], _hold=m["hold"])
     form = controls(runs, rid, defaults, symbols, enabled, fields or {})
     sidebar = "".join(
         f"<a href='{url}'"
@@ -560,7 +621,7 @@ window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
 
 
 CSS = """
-.vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--edge:var(--sd-line)}
+.vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--dow:#c88720;--edge:var(--sd-line)}
 .vb-app main{padding:0 14px!important;max-width:1900px!important}.vb-app .sd-header{padding:0 14px}
 .vb-layout{display:grid;grid-template-columns:182px minmax(0,1fr);min-height:calc(100vh - 50px)}
 .vb-sidebar{border-right:1px solid var(--edge);padding:24px 6px 12px 0}.vb-sidebar>b{display:block;padding:0 14px 14px}.vb-sidebar nav{display:grid;gap:4px}
@@ -580,7 +641,7 @@ CSS = """
 .vb-run{min-height:42px;background:var(--btn);color:var(--btnink);border:0;border-radius:8px;padding:0 15px;font-weight:700}.vb-run:disabled{opacity:.55}
 .vb-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:16px}.vb-kpi{display:flex;align-items:flex-start;gap:12px;min-height:100px;padding:14px 16px}.vb-kpi .sd-icon{background:var(--jsoft);color:var(--green);border-radius:8px;padding:8px;box-sizing:content-box}.vb-kpi:nth-child(3) .sd-icon{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}.vb-kpi strong{display:block;font-size:25px;line-height:1.5}.vb-kpi small{color:var(--sd-muted)}
 .vb-grid{display:grid;grid-template-columns:minmax(0,2.75fr) minmax(255px,1fr);gap:16px}.vb-grid>div,.vb-grid>aside{display:flex;min-width:0;flex-direction:column;gap:15px}.vb-card h2{font-size:17px;margin:0 0 9px;letter-spacing:-.4px;display:flex;align-items:center;gap:8px}
-.vb-charts header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vb-charts header h2{margin:0}.vb-legend{font-size:12px;color:var(--sd-muted)}.vb-legend:before{content:'▬ ';color:var(--green)}
+.vb-charts header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vb-charts header h2{margin:0}.vb-legend{display:inline-flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--sd-muted)}.vb-key:before{content:'';display:inline-block;width:12px;height:3px;margin-right:4px;vertical-align:middle;background:var(--green)}.vb-key.basket:before{background:var(--benchmark)}.vb-key.dow:before{background:var(--dow)}.vb-key.dow{color:inherit}.vb-trade-count{text-decoration:underline;text-underline-offset:3px}
 .vb-ranges,.vb-periods{margin-left:auto;display:inline-flex;gap:4px;align-items:center}.vb-ranges a,.vb-periods a{font-size:12px;color:var(--sd-muted);padding:3px 9px;border-radius:12px}.vb-ranges a[aria-current],.vb-periods a[aria-current]{background:var(--btn);color:var(--btnink)}.vb-plot{display:block;width:100%;height:auto}.vb-plot text{fill:var(--sd-muted);font:12px system-ui}.vb-plot path{stroke:var(--edge);stroke-width:.7}.vb-plot .vb-end{font-size:10px;font-weight:700}.vb-divider{border-top:1px solid var(--edge);padding-top:8px}.vb-empty{padding:32px;color:var(--sd-muted)}
 .vb-grid dl{margin:0}.vb-grid dl div{display:flex;justify-content:space-between;gap:7px;border-top:1px solid var(--edge);padding:4px 0;font-size:13px}.vb-grid dd{margin:0;text-align:right;font-weight:550;overflow-wrap:anywhere}.vb-grid dt{color:var(--sd-muted)}
 .vb-stats{display:grid;grid-template-columns:1fr 1fr;gap:25px}.vb-stats table{width:100%;border-collapse:collapse;align-self:start}.vb-stats :is(th,td){font-size:13px;padding:5px 4px;border-width:0 0 1px;text-align:left}.vb-stats :is(th,td):last-child{text-align:right}.vb-stats dl:first-child{border-right:1px solid var(--edge);padding-right:18px}
