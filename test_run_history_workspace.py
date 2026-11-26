@@ -125,8 +125,12 @@ class HistoryWorkspaceTests(unittest.TestCase):
             page.get_by_role("link", name="Run History", exact=True).click()
             root = page.locator("#rh-root")
             root.locator("svg.vb-plot").wait_for()
-            for width in (1672, 1024, 390):
+            for width in (2560, 1672, 1360, 1024, 390):
                 page.set_viewport_size({"width": width, "height": 941})
+                bounds = root.bounding_box()
+                viewport = page.evaluate("document.documentElement.clientWidth")
+                self.assertAlmostEqual(bounds["width"], min(viewport, 1360), delta=1)
+                self.assertAlmostEqual(bounds["x"], (viewport - bounds["width"]) / 2, delta=1)
                 self.assertLessEqual(
                     page.evaluate("document.documentElement.scrollWidth"), width + 1
                 )

@@ -526,10 +526,10 @@ async function loadRunHistory(host, force=false) {
 """
 
 CSS = """
-body:has(.studio-page[data-view=history]) main{max-width:none;padding:0}
+body:has(.studio-page[data-view=history]) main{width:100%;max-width:1360px;margin-inline:auto;padding:0}
 body:has(.studio-page[data-view=history]) :is(.sd-header,.sd-hero,main>.studio-tabs,main>p.muted){display:none}
 .studio-page[data-view=history]>:not(#rh-host){display:none!important}
-#rh-root{grid-template-columns:clamp(185px,13.7vw,235px) minmax(0,1fr)}
+#rh-root{grid-template-columns:clamp(185px,16%,220px) minmax(0,1fr)}
 #rh-root .ss-main{padding:0 clamp(14px,1.32vw,26px) 28px}
 #rh-root .ss-brand{padding:0 5px 16px;margin:0 4px 17px;gap:13px;border-bottom:1px solid var(--ss-border)}
 #rh-root .ss-side nav a{padding:10px 13px}
