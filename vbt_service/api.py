@@ -36,6 +36,8 @@ class Replay(BacktestRequest):
     source: str = Field(default="Archived signals", max_length=64)
     warmup_sessions: dict[str, Annotated[int, Field(ge=1, le=252)]] = Field(default_factory=dict, max_length=5000)
     observed_days: int = Field(ge=1, le=3000)
+    skipped_symbols: dict[str, Annotated[str, Field(max_length=10)]] = Field(default_factory=dict, max_length=5000)
+    candle_days: int = Field(default=1, ge=1, le=5)
 
 
 class Research(Replay):

@@ -93,6 +93,9 @@ def submit(st, fields, buys):
             )
         return symbols
 
+    bar_days = backtests.candle_days(fields.get("candle_days"))
+    if bar_days > 1 and not start:
+        raise ValueError("Choose a date range to use 2–5 day price bars. Saved signals use the run's own daily bars.")
     if basket and not start:
         data = backtests.cohort(st, rid, holds, fee, selected, target=target)
     else:
@@ -106,6 +109,7 @@ def submit(st, fields, buys):
             buys,
             st,
             interval=(start, end) if start else None,
+            **({"candle_days": bar_days} if bar_days > 1 else {}),
         )
     data["profit_target_pct"] = target
     data["stop_loss_pct"] = stop
@@ -228,6 +232,13 @@ def trade_text(info, m, group):
         + "\n"
         + "".join("\t".join(map(str, row)) + "\n" for row in rows)
     )
+
+
+def skipped_note(skipped):
+    names = sorted(skipped)
+    listed = ", ".join(names[:12]) + (f" and {len(names) - 12} more" if len(names) > 12 else "")
+    return (f"Skipped {len(names)} symbol{'s' if len(names) != 1 else ''} without complete daily prices "
+            f"in this range: {listed}.")
 
 
 def holding_label(hold):
@@ -424,7 +435,8 @@ def report(job, key, m, window):
         [
             ("Strategy", info.get("strategy", "—")),
             ("Symbols", basket_label or symbol),
-            ("Price bars", "Daily"),
+            ("Price bars", "Daily" if info.get("candle_days", 1) == 1
+             else f"{info['candle_days']}-day for signals, daily for trades"),
             ("Entry price", entry_label(info) if info else "Signal-day close"),
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
@@ -455,6 +467,8 @@ def report(job, key, m, window):
             notes.append("Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay.")
         if info.get("warmup_sessions"):
             notes.append(warmup_note(info))
+        if info.get("skipped_symbols"):
+            notes.append(skipped_note(info["skipped_symbols"]))
         if info.get("entry_basis") == "signal_close":
             notes.append("Entries assume a fill at the closing price used to calculate the daily signal.")
         if m.get("profit_target_pct"):
@@ -516,6 +530,11 @@ def controls(runs, rid, info, symbols, enabled, fields):
     commission = fields.get("commission", format(info.get("fee_bps", 0) / 100, "g"))
     target = fields.get("profit_target_pct", info.get("profit_target_pct") or "")
     stop = fields.get("stop_loss_pct", info.get("stop_loss_pct") or "")
+    bar_days = str(fields.get("candle_days", info.get("candle_days") or 1)).strip() or "1"
+    bar_options = "".join(
+        f"<option value='{n}'" + (" selected" if str(n) == bar_days else "") + f">{'Daily' if n == 1 else f'{n}-day'}</option>"
+        for n in range(1, backtests.MAX_CANDLE_DAYS + 1)
+    )
     start, end = fields.get("start", ""), fields.get("end", "")
     if not fields and info.get("source") == "Historical date-range replay":
         start, end = info.get("_start", ""), info.get("_end", "")
@@ -541,7 +560,8 @@ def controls(runs, rid, info, symbols, enabled, fields):
         f"<input name='holds' list='vb-holds' value='{esc(holds)}' required "
         "title='Enter one holding period, or comma-separated periods to compare'></label>"
         f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
-        "<label>Initial Capital<input readonly value='$100,000'></label>"
+        f"<label>Price bars<select name='candle_days' title='Bar size used to calculate the signals. "
+        f"Longer bars need a date range and a strategy that supports them. Trades are always priced on daily bars.'>{bar_options}</select></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
         "title='Buy at the signal close. Sell on the first target touch within the maximum hold, or at the close of its last trading day.'></label>"
@@ -580,7 +600,7 @@ def coverage_options(error, fields):
     forms = []
     for label, values in options:
         inputs = "".join(f"<input type='hidden' name='{name}' value='{esc(values.get(name, ''))}'>"
-                         for name in ("rid", "symbols", "start", "end", "holds", "profit_target_pct", "stop_loss_pct", "commission")
+                         for name in ("rid", "symbols", "start", "end", "holds", "profit_target_pct", "stop_loss_pct", "candle_days", "commission")
                          if name in values)
         forms.append(f"<form method='post' action='/vectorbt/run'>{inputs}<button type='submit'>{esc(label)}</button></form>")
     return "<div class='vb-recovery'>" + "".join(forms) + "</div>" if forms else ""
@@ -668,7 +688,8 @@ def page(host, query, fields=None, error=""):
         + server.render_tabs("vectorbt")
         + f"<style>{CSS}</style><nav class='studio-tabs' aria-label='Strategies Studio'>{tabs}</nav>"
         f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>VectorBT PRO Backtesting</h1>"
-        "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div></header>"
+        "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div>"
+        f"<p class='vb-capital'>Initial capital <strong>{fmt(CAPITAL, 'usd')[:-3]}</strong></p></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
         + (coverage_options(error, fields) if fields and isinstance(error, backtests.ReplayCoverageError) else "")
         + form
@@ -749,7 +770,13 @@ for(const pop of [picker,dates]){
 }
 document.querySelector('#vb-saved')?.addEventListener('click',()=>document.querySelector('#saved-backtests').open=true);
 form.addEventListener('invalid',e=>{if(dates.contains(e.target))dates.open=true;if(picker.contains(e.target))picker.open=true},true);
-form.onsubmit=()=>{updateRange(true);form.querySelector('button').disabled=true;form.querySelector('button').textContent='Submitting…'};
+form.onsubmit=()=>{updateRange(true);form.querySelector('button').disabled=true;form.querySelector('button').textContent='Running…'};
+// The recovery buttons post their own forms. Show that the click was taken and block a second one,
+// because a repeated click cancels the request that is already being worked on.
+document.querySelectorAll('.vb-recovery form').forEach(recovery=>recovery.addEventListener('submit',()=>{
+  recovery.querySelector('button').textContent='Running…';
+  setTimeout(()=>document.querySelectorAll('.vb-recovery button, .vb-run').forEach(button=>button.disabled=true));
+}));
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
 // A queued backtest: reload on a fixed interval, up to a limit, unless the form is being edited.
 const here=new URL(location.href), polls=Number(here.searchParams.get('poll'))||0;
@@ -770,6 +797,7 @@ CSS = """
 .vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--dow:#c88720;--edge:var(--sd-line)}
 .vb-content{min-width:0}
 .vb-recovery{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.vb-recovery form{margin:0}
+.vb-heading .vb-capital{margin:0 0 0 auto;text-align:right;color:var(--sd-muted);font-size:13px;white-space:nowrap}.vb-heading .vb-capital strong{display:block;font-size:19px;color:var(--sd-ink)}
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
 .vb-controls{display:grid;grid-template-columns:1.3fr 1.5fr .78fr .85fr .8fr .8fr 1.35fr auto;align-items:end;gap:16px;margin-bottom:16px}

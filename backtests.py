@@ -113,8 +113,29 @@ def replay_failure(log, mem_mb):
     return "Historical Python replay stopped. " + reason[:300].rstrip(".") + "."
 
 
-def replay(st, meta, cache, symbol, sessions):
+MAX_CANDLE_DAYS = 5
+
+
+def candle_days(value):
+    """Trading days per price bar used to compute signals: blank or 1 is daily."""
+    text = (value or "").strip()
+    if not text:
+        return 1
+    try:
+        days = int(text)
+    except ValueError:
+        days = 0
+    if not 1 <= days <= MAX_CANDLE_DAYS:
+        raise ValueError(f"Choose price bars of 1–{MAX_CANDLE_DAYS} trading days.")
+    return days
+
+
+def replay(st, meta, cache, symbol, sessions, candle_days=1):
     strategy = st.meta().get(meta["strategy"], {})
+    if candle_days > 1 and not strategy.get("candles"):
+        raise ValueError(
+            "This strategy only works on daily price bars. A strategy opts in to longer bars with a CANDLE_DAYS setting."
+        )
     if strategy.get("kind") != "generic" or not 4 <= sessions <= 252:
         raise ValueError(
             "Historical Python replay requires a generic daily strategy and 4–252 sessions."
@@ -156,7 +177,9 @@ def replay(st, meta, cache, symbol, sessions):
                 str(output),
             ]
             if strategy.get("candles"):
-                args += ["--candle-label", sm.candles_label("1d")]
+                args += ["--candle-label", sm.candles_label(f"{candle_days}d")]
+            if candle_days > 1:
+                args += ["--candle-days", str(candle_days)]
             timeout = replay_timeout(st)
             code, _ = sm.run_sandboxed(args, work, log, timeout, timeout, st.mem_mb)
             symbol_count = 1 if isinstance(symbol, str) else len(symbol)
@@ -206,7 +229,11 @@ class ReplayCoverageError(ValueError):
         super().__init__(message)
 
 
-def calendar_replay(manager, meta, cache, history, symbol, start, end, *, tickers=None):
+def calendar_replay(manager, meta, cache, history, symbol, start, end, *, tickers=None, candle_days=1, skipped=None):
+    """Replay the strategy over the NYSE sessions in a date range.
+
+    Symbols in a basket that cannot be priced on every session are left out and recorded in
+    `skipped` (ticker -> first unpriced day) when the caller passes a dict for it."""
     from paper_trading.market import exchange
     from finviz_prices import parse_quote_csv
 
@@ -278,7 +305,14 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
                 for k in ("o", "c")
             ):
                 missing.setdefault(ticker, set()).add(day)
-    if missing:
+    covered = [ticker for ticker in symbols if ticker not in missing]
+    if missing and covered and not isinstance(symbol, str) and skipped is not None:
+        # Leave out the symbols that cannot be priced on every session and run the rest.
+        skipped.update((ticker, min(days)) for ticker, days in missing.items())
+        symbols = covered
+        keys = {ticker: keys[ticker] for ticker in covered}
+        symbol = covered[0] if len(covered) == 1 else covered
+    elif missing:
         raise ReplayCoverageError(missing, symbols, expected)
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp)
@@ -296,7 +330,8 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
         )
         snapshot.chmod(0o644)
         buys, days, version, warmup_sessions = replay(
-            manager, dict(meta, asof=expected[-1]), snapshot, symbol, len(expected)
+            manager, dict(meta, asof=expected[-1]), snapshot, symbol, len(expected),
+            **({"candle_days": candle_days} if candle_days > 1 else {}),
         )
     if days != set(expected):
         raise ValueError("The replay did not evaluate every selected session.")
@@ -328,6 +363,7 @@ def dataset(
     manager=None,
     sessions=None,
     interval=None,
+    candle_days=1,
 ):
     symbols = [symbol] if isinstance(symbol, str) else symbol
     if (
@@ -362,7 +398,12 @@ def dataset(
     version = meta.get("strategy_sha256")
     snapshot = json.loads(cache.read_text())
     history = snapshot["history"]
+    if candle_days > 1 and interval is None:
+        raise ValueError(
+            "Longer price bars need a date range. Saved signals were calculated on the run's own daily bars."
+        )
     if interval is not None:
+        skipped = {}
         bars, version, warmup_sessions = calendar_replay(
             manager,
             meta,
@@ -371,21 +412,25 @@ def dataset(
             symbol,
             *interval,
             tickers=snapshot.get("tickers", []),
+            skipped=skipped,
+            **({"candle_days": candle_days} if candle_days > 1 else {}),
         )
-        payload = dict(bars=bars) if isinstance(symbol, str) else dict(series=bars)
+        remaining = [s for s in symbols if s not in skipped]
+        single = isinstance(bars, list)  # One symbol was asked for, or only one could be priced.
+        payload = dict(bars=bars) if single else dict(series=bars)
         return dict(
             **payload,
             strategy=meta["strategy"],
             version=version,
             run=rid,
-            symbol=symbol if isinstance(symbol, str) else f"{len(symbols)} symbols",
-            observed_days=len(bars)
-            if isinstance(symbol, str)
-            else len(bars[symbols[0]]),
+            symbol=remaining[0] if single else f"{len(remaining)} symbols",
+            observed_days=len(bars) if single else len(next(iter(bars.values()))),
             holds=holds,
             fee_bps=fee,
             source="Historical date-range replay",
             warmup_sessions=warmup_sessions,
+            skipped_symbols=skipped,
+            candle_days=candle_days,
         )
     bars = []
     for day, prices in sorted(history.items()):

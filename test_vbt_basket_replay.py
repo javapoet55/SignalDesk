@@ -90,15 +90,32 @@ class RangeSubmission(unittest.TestCase):
                 (folder / "history_cache.json").write_text(
                     json.dumps(dict(history=history))
                 )
-                with self.assertRaisesRegex(
-                    ValueError, "CCCC lacks a daily open or close on " + days[2]
-                ) as problem:
+                # A basket leaves out the symbol that cannot be priced and runs the rest.
+                submit(
+                    manager,
+                    dict(rid=rid, symbols="ALL", start=days[0], end=days[-1]),
+                    lambda _: symbols,
+                )
+                data = service.call_args.args[1]
+                self.assertEqual(list(data["series"]), ["ANF", "TGLS", "CELC"])
+                self.assertEqual(data["skipped_symbols"], {"CCCC": days[2]})
+                self.assertEqual(data["symbol"], "3 symbols")
+                # With one symbol left it runs as a single-symbol backtest.
+                submit(
+                    manager,
+                    dict(rid=rid, symbols="ANF,CCCC", start=days[0], end=days[-1]),
+                    lambda _: symbols,
+                )
+                data = service.call_args.args[1]
+                self.assertEqual((data["symbol"], len(data["bars"]), data["skipped_symbols"]), ("ANF", len(days), {"CCCC": days[2]}))
+                self.assertNotIn("series", data)
+                # A symbol asked for on its own, or a basket with nothing fully priced, still explains itself.
+                with self.assertRaisesRegex(ValueError, "CCCC lacks a daily open or close on " + days[2]) as problem:
                     submit(
                         manager,
-                        dict(rid=rid, symbols="ALL", start=days[0], end=days[-1]),
+                        dict(rid=rid, symbols="CCCC", start=days[0], end=days[-1]),
                         lambda _: symbols,
                     )
-                self.assertEqual(problem.exception.covered_symbols, ["ANF", "TGLS", "CELC"])
                 self.assertEqual(problem.exception.common_range, (days[3], days[-1]))
 
 
