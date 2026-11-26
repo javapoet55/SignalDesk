@@ -13,6 +13,7 @@ class Bar(BaseModel):
     day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     open: FiniteFloat = Field(gt=0)
     high: FiniteFloat | None = Field(default=None, gt=0)
+    low: FiniteFloat | None = Field(default=None, gt=0)
     close: FiniteFloat = Field(gt=0)
     signal: bool
 
@@ -28,6 +29,7 @@ class BacktestRequest(BaseModel):
     entry_basis: Literal["next_open", "signal_close"] = "next_open"
     exit_on_target: bool = False
     profit_target_pct: FiniteFloat | None = Field(default=None, gt=0)
+    stop_loss_pct: FiniteFloat | None = Field(default=None, gt=0, lt=100)
 
 
 class Replay(BacktestRequest):
@@ -50,6 +52,7 @@ class BasketResearch(Replay):
 class SessionPrices(BaseModel):
     open: FiniteFloat | None
     high: FiniteFloat | None
+    low: FiniteFloat | None = None
     close: FiniteFloat | None
 
 

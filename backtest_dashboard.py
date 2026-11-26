@@ -178,8 +178,11 @@ def target_rule(info):
     if not target:
         return ""
     if info.get("exit_on_target"):
+        stop = info.get("stop_loss_pct")
         return (f"Sell at the first {target:g}% gain from entry, or at the opening price if it gaps above the target. "
-                "If the target is missed, sell at the close of trading day seven. "
+                + (f"Sell at a {stop:g}% loss from entry, or at the opening price if it gaps below the stop. "
+                   "Daily prices do not show which came first, so a session that touches both counts as stopped. " if stop else "")
+                + ("If neither is reached" if stop else "If the target is missed") + ", sell at the close of trading day seven. "
                 + ("Day one is the first trading session after the signal close." if info.get("entry_basis") == "signal_close"
                    else "The entry day counts as day one."))
     return f"A win means the price reached {target:g}% above entry during the hold. Net P/L uses the scheduled exit price."
@@ -211,6 +214,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     row_pnl = []
     row_values = []  # Unformatted entry price, exit price, net P/L and return for exports.
     row_hits = []
+    row_reasons = []  # "target", "stop" or "time" where the engine reported why a trade closed.
     fills = []
     benchmark = None
     extra = ""
@@ -240,6 +244,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             if info.get("exit_on_target"):
                 fill = result["target_fills"].get(sym, {})
                 exit_day, sell, duration = fill.get("exit", "—"), fill.get("sell"), fill.get("hold")
+                row_reasons.append(fill.get("reason"))
             if complete:
                 fills.append(dict(pnl=pnl, hold=duration))
             rows.append(
@@ -302,6 +307,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             row_values.append((t["buy"], t["sell"], t["pnl"], t["pct"]))
             if target is not None:
                 row_hits.append(t.get("target_hit"))
+            row_reasons.append(t.get("exit_reason"))
             rows.append(
                 [
                     t.get("symbol", info["symbol"]),
@@ -382,7 +388,10 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             group = "wins" if value > 0 else "losses" if value < 0 else "flat"
         row_groups.append(group)
         if target is not None:
-            rows[index].append({"wins": "Hit", "losses": "Missed", "unscored": "High unavailable", "pending": "—"}[group])
+            stopped = index < len(row_reasons) and row_reasons[index] == "stop"
+            rows[index].append("Stopped" if stopped and group == "losses" else
+                               {"wins": "Hit", "losses": "Missed", "unscored": "High unavailable", "pending": "—"}[group])
+    stop_count = sum(reason == "stop" for reason in row_reasons)
     win_count, loss_count = row_groups.count("wins"), row_groups.count("losses")
     unscored = row_groups.count("unscored")
     scored = len(fills) - unscored
@@ -414,6 +423,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
                     start=start, end=end, total=total, sharpe=sharpe, maxdd=maxdd, rate=rate,
                     annual=annual, trades=n, wins=win_count, losses=loss_count, rows=rows, row_pnl=row_pnl, row_values=row_values,
                     row_groups=row_groups, profit_target_pct=target, scored=scored, unscored=unscored,
+                    stop_loss_pct=info.get("stop_loss_pct"), stopped=stop_count,
                     avg_win=mean(wins), avg_loss=mean(losses), expectancy=mean(pnl),
                     profit_factor=(sum(wins) / -sum(losses) if losses else math.inf if wins else None),
                     avg_hold=mean([t["hold"] for t in fills]))
@@ -478,6 +488,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             facts(
                 [
                     ("Target hits / misses" if target else "Winning / losing", f"{win_count} / {loss_count}"),
+                    *([("Stopped out", str(stop_count))] if info.get("stop_loss_pct") else []),
                     *([("Closed trades with incomplete highs", str(unscored))] if unscored else []),
                     ("Average positive P/L" if target else "Average win", fmt(mean(wins), "usd")),
                     ("Average negative P/L" if target else "Average loss", fmt(mean(losses), "usd")),

@@ -155,8 +155,8 @@ class BatchSignals(unittest.TestCase):
             self.assertEqual(snapshot["completed_sessions"], 2)
             self.assertEqual(snapshot["target_days"][-1], "2026-12-07")
             self.assertEqual(snapshot["target_bars"]["ABC"], [
-                dict(open=300,high=302,close=301), dict(open=301,high=306,close=299),
-                dict(open=299,high=None,close=None)])
+                dict(open=300,high=302,low=299,close=301), dict(open=301,high=306,low=298,close=299),
+                dict(open=299,high=None,low=None,close=None)])
 
 
 class CalendarReplayTests(unittest.TestCase):

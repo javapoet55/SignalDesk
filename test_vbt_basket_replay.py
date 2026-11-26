@@ -175,7 +175,7 @@ class PortfolioCalculation(unittest.TestCase):
         )
         snapshot = calculate(cohort)
         self.assertEqual(
-            snapshot["target_fills"]["GAP"], dict(exit=days[2], sell=105, hold=2)
+            snapshot["target_fills"]["GAP"], dict(exit=days[2], sell=105, hold=2, reason="target")
         )
         self.assertEqual(snapshot["target_hits"]["TIME"], [False])
         self.assertAlmostEqual(
@@ -275,7 +275,7 @@ class PortfolioCalculation(unittest.TestCase):
         for f in full["fills"]:
             self.assertEqual(
                 result["target_fills"][f["symbol"]],
-                {k: f[k] for k in ("exit", "sell", "hold")},
+                dict({k: f[k] for k in ("exit", "sell", "hold")}, reason=f["exit_reason"]),
             )
 
     def test_profit_target_touch_within_open_to_open_hold(self):
