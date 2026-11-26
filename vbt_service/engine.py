@@ -89,7 +89,8 @@ def simulate(series, start, end, hold, fee_bps, detail=False, target=None):
     return result
 
 
-TARGET_SESSIONS = 7
+TARGET_SESSIONS = 7       # Default maximum hold when a profit target is set.
+MAX_TARGET_SESSIONS = 60  # Longest maximum hold a target exit may use.
 
 
 def limit_price(entry, pct):
@@ -100,7 +101,7 @@ def stop_price(entry, pct):
     return float(Decimal(str(entry)) * (1 - Decimal(str(pct)) / 100))
 
 
-def target_exit(bar, limit, age, complete=True, stop=None):
+def target_exit(bar, limit, age, complete=True, stop=None, max_age=TARGET_SESSIONS):
     """Return the first executable sell price, whether it filled the target, and why it sold.
 
     The reason is "target", "stop" or "time". Daily bars do not say whether the high or the low
@@ -123,7 +124,7 @@ def target_exit(bar, limit, age, complete=True, stop=None):
             return limit, True, "target"
         if bar.get("high") is None:
             raise ValueError("daily high unavailable")
-        if age == TARGET_SESSIONS:
+        if age >= max_age:
             if bar.get("close") is None:
                 raise ValueError("closing price unavailable")
             return bar["close"], False, "time"
@@ -157,7 +158,7 @@ def simulate_orders(series, start, end, hold, fee_bps, detail=False, *, target, 
                     fill = (bar["open"], None, "hold") if age == hold else None
                 else:
                     try:
-                        fill = target_exit(bar, limit, age, stop=floor)
+                        fill = target_exit(bar, limit, age, stop=floor, max_age=hold)
                     except ValueError as exc:
                         raise ValueError(f"{symbol} on {days[i]}: {exc}. A target exit cannot be priced.") from exc
                 if fill is not None:
@@ -247,7 +248,7 @@ def target_cohort(data):
             for i, bar in enumerate(bars):
                 if sell is None:
                     try:
-                        execution = target_exit(bar, limit, i + 1, i < completed, floor)
+                        execution = target_exit(bar, limit, i + 1, i < completed, floor, data["holds"][0])
                     except ValueError as exc:
                         status = f"{days[i]}: {exc}"
                         break
@@ -345,8 +346,10 @@ def cohort_returns(data):
 def calculate(data):
     target_mode = data.get("exit_on_target", False)
     signal_close = data.get("entry_basis") == "signal_close"
-    if target_mode and (not data.get("profit_target_pct") or data["holds"] != [TARGET_SESSIONS]):
-        raise ValueError("Target exits require a positive profit target and a seven-session maximum.")
+    holds = data["holds"]
+    if target_mode and (not data.get("profit_target_pct") or len(holds) != 1
+                        or type(holds[0]) is not int or not 1 <= holds[0] <= MAX_TARGET_SESSIONS):
+        raise ValueError(f"Target exits require a positive profit target and one maximum hold of 1–{MAX_TARGET_SESSIONS} sessions.")
     stop_pct = data.get("stop_loss_pct")
     if stop_pct is not None and (not target_mode or not math.isfinite(stop_pct) or not 0 < stop_pct < 100):
         raise ValueError("A stop loss needs a profit target and must be between 0 and 100 percent.")

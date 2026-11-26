@@ -58,9 +58,11 @@ def submit(st, fields, buys):
     except ValueError:
         raise ValueError("Enter the commission as a percentage from 0 to 1.") from None
     try:
-        holds = [backtests.TARGET_SESSIONS] if target else [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
+        holds = [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")] if not target else []
     except ValueError:
         raise ValueError("Enter a holding period in whole trading days, or a comma-separated list to compare.") from None
+    if target:
+        holds = [backtests.target_hold(fields.get("holds"))]
     symbols = list(
         dict.fromkeys(
             s.strip().upper() for s in fields.get("symbols", "").split(",") if s.strip()
@@ -534,14 +536,13 @@ def controls(runs, rid, info, symbols, enabled, fields):
         f"<label>Symbols<input name='symbols' aria-label='Symbols' value='{esc(value)}' required placeholder='ALL or comma-separated tickers'></label>"
         f"<div class='vb-options'>{options}</div></div></details>"
         f"<label><span id='vb-hold-label'>{'Maximum hold (trading days)' if target else 'Hold (trading days)'}</span>"
-        f"<input name='holds' list='vb-holds' data-fixed='{esc(holds)}' value='{7 if target else esc(holds)}' "
-        + ("readonly " if target else "") + "required "
+        f"<input name='holds' list='vb-holds' value='{esc(holds)}' required "
         "title='Enter one holding period, or comma-separated periods to compare'></label>"
         f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
         "<label>Initial Capital<input readonly value='$100,000'></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
-        "title='Buy at the signal close. Sell on the first target touch during the next seven trading days, or at the seventh close.'></label>"
+        "title='Buy at the signal close. Sell on the first target touch within the maximum hold, or at the close of its last trading day.'></label>"
         f"<label>Stop loss (%)<input name='stop_loss_pct' type='number' min='0' max='99.99' step='any' value='{esc(stop)}' placeholder='Optional' "
         "title='Used with a profit target. Sell when the price falls this far below entry. If one day touches both the stop and the target, the stop counts first.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
@@ -690,13 +691,16 @@ SCRIPT = """
 const form=document.querySelector('.vb-controls');
 form.addEventListener('input',()=>document.querySelector('.vb-recovery')?.remove(),{once:true});
 const holdField=form.elements.holds, targetField=form.elements.profit_target_pct;
+let holdEdited=false, targetWasActive=Number(targetField.value)>0;
+holdField.addEventListener('input',()=>holdEdited=true);
 function syncHold(){
+  // With a profit target the hold is one editable maximum (1-60 days). Turning a target on suggests
+  // the default of 7 unless the hold was typed by hand; a list such as "1,5,10" never applies.
   const active=Number(targetField.value)>0;
-  if(!holdField.readOnly)holdField.dataset.fixed=holdField.value;
-  holdField.value=active?'7':holdField.dataset.fixed;
-  holdField.readOnly=active;
+  if(active && ((!targetWasActive && !holdEdited) || !/^\s*\d+\s*$/.test(holdField.value))) holdField.value='7';
+  targetWasActive=active;
   document.querySelector('#vb-hold-label').textContent=active?'Maximum hold (trading days)':'Hold (trading days)';
-  holdField.title=active?'Exit on target or at the seventh trading day’s close':'Enter fixed holding periods in trading days';
+  holdField.title=active?'Sell at the target, or at the close of this trading day. Enter 1 to 60.':'Enter one holding period, or comma-separated periods to compare';
 }
 targetField.addEventListener('input',syncHold);
 syncHold();

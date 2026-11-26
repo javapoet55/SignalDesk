@@ -179,10 +179,11 @@ def target_rule(info):
         return ""
     if info.get("exit_on_target"):
         stop = info.get("stop_loss_pct")
+        last_day = (info.get("holds") or [7])[0]
         return (f"Sell at the first {target:g}% gain from entry, or at the opening price if it gaps above the target. "
                 + (f"Sell at a {stop:g}% loss from entry, or at the opening price if it gaps below the stop. "
                    "Daily prices do not show which came first, so a session that touches both counts as stopped. " if stop else "")
-                + ("If neither is reached" if stop else "If the target is missed") + ", sell at the close of trading day seven. "
+                + ("If neither is reached" if stop else "If the target is missed") + f", sell at the close of trading day {last_day}. "
                 + ("Day one is the first trading session after the signal close." if info.get("entry_basis") == "signal_close"
                    else "The entry day counts as day one."))
     return f"A win means the price reached {target:g}% above entry during the hold. Net P/L uses the scheduled exit price."

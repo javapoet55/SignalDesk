@@ -32,7 +32,22 @@ def replay_timeout(manager, env=os.environ):
     return min(limit, manager.timeout)
 
 
-TARGET_SESSIONS = 7
+TARGET_SESSIONS = 7       # Default maximum hold when a profit target is set.
+MAX_TARGET_SESSIONS = 60  # Must match vbt_service.engine.MAX_TARGET_SESSIONS.
+
+
+def target_hold(value):
+    """The single maximum hold, in trading days, used with a profit target. Blank means the default."""
+    text = (value or "").strip()
+    if not text:
+        return TARGET_SESSIONS
+    try:
+        hold = int(text)
+    except ValueError:
+        hold = 0
+    if not 1 <= hold <= MAX_TARGET_SESSIONS:
+        raise ValueError(f"With a profit target, enter one maximum hold of 1–{MAX_TARGET_SESSIONS} trading days.")
+    return hold
 
 
 def profit_target(value):
@@ -547,7 +562,8 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
         raise ValueError("The saved signal date has no NYSE closing session.")
     entry = cal.date_to_session(meta["asof"])
     if target is not None:
-        holds = [TARGET_SESSIONS]
+        # One value is the chosen maximum hold. A comparison list has no meaning with a target.
+        holds = holds if len(holds) == 1 else [TARGET_SESSIONS]
     sessions = [entry] + [cal.session_offset(entry, h) for h in holds]
     dates = [s.date().isoformat() for s in sessions]
     elapsed = [cal.session_close(entry) <= now] + [cal.session_open(s) <= now for s in sessions[1:]]

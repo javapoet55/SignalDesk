@@ -3267,7 +3267,9 @@ class Handler(BaseHTTPRequestHandler):
                         if form.get("source") == "range" and not (start and end):
                             raise ValueError("Choose both dates for historical replay.")
                         job_id = vb_workspace.submit(st, {
-                            "rid": form.get("rid", ""), "symbols": "ALL", "holds": form.get("holds", ""),
+                            "rid": form.get("rid", ""), "symbols": "ALL",
+                            # This form compares several holds; with a target it uses the default maximum.
+                            "holds": "" if form.get("profit_target_pct", "").strip() else form.get("holds", ""),
                             "commission": str(float(form.get("fee", "0")) / 100), "start": start, "end": end,
                             "profit_target_pct": form.get("profit_target_pct", ""),
                             "stop_loss_pct": form.get("stop_loss_pct", ""),
