@@ -193,7 +193,7 @@ class WorkspaceFlow(unittest.TestCase):
             page.get_by_label("Hold (trading days)").fill("2,4")
             with patch(
                 "backtests.calendar_replay",
-                return_value=(submitted[0]["bars"][:7], "fixture"),
+                return_value=(submitted[0]["bars"][:7], "fixture", {}),
             ) as replay:
                 page.get_by_role("button", name="Run Backtest").click()
                 page.wait_for_url("**/vectorbt?job=*")
@@ -222,7 +222,7 @@ class WorkspaceFlow(unittest.TestCase):
                 page.locator(".vb-dates summary").click()
                 series = {s: submitted[0]["bars"] for s in ("ABC", "XYZ")}
                 with patch(
-                    "backtests.calendar_replay", return_value=(series, "fixture")
+                    "backtests.calendar_replay", return_value=(series, "fixture", {})
                 ) as replay:
                     page.get_by_role("button", name="Run Backtest").click()
                     page.wait_for_load_state("networkidle")
@@ -252,7 +252,7 @@ class WorkspaceFlow(unittest.TestCase):
             self.assertEqual(alternatives.count(), 2)
             self.assertEqual(alternatives.first.locator("[name=start]").input_value(), "2026-10-02")
             self.assertEqual(alternatives.first.locator("[name=symbols]").input_value(), "ABC,XYZ")
-            with patch("backtests.calendar_replay", return_value=(submitted[0]["bars"][:7], "fixture")) as replay:
+            with patch("backtests.calendar_replay", return_value=(submitted[0]["bars"][:7], "fixture", {})) as replay:
                 alternatives.last.get_by_role("button").click()
                 page.wait_for_url("**/vectorbt?job=*")
                 self.assertEqual(replay.call_args.args[-3:], ("ABC", "2026-10-01", "2026-10-09"))

@@ -30,6 +30,7 @@ class BacktestRequest(BaseModel):
 
 class Replay(BacktestRequest):
     source: str = Field(default="Archived signals", max_length=64)
+    warmup_sessions: dict[str, Annotated[int, Field(ge=1, le=252)]] = Field(default_factory=dict, max_length=5000)
     observed_days: int = Field(ge=1, le=3000)
 
 

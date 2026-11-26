@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import backtests
 import dow_benchmark
 import strategies as sm
-from backtest_dashboard import CAPITAL, fmt, result_html
+from backtest_dashboard import CAPITAL, fmt, result_html, warmup_note
 from backtest_dashboard import e as esc
 from strategy_design import icon
 
@@ -412,6 +412,8 @@ def report(job, key, m, window):
         )
     if info.get("symbols"):
         status += ". Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay."
+    if info.get("warmup_sessions"):
+        status += " " + warmup_note(info)
     if m.get("profit_target_pct"):
         status += f" A win means the price reached {m['profit_target_pct']:g}% above entry during the hold. P/L uses the scheduled exit price."
         if m["unscored"]:

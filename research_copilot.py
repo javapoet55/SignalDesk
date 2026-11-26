@@ -12,7 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backtest_dashboard import CSS, result_html
+from backtest_dashboard import CSS, result_html, warmup_note
 
 MODES = (
     "Explain results",
@@ -142,6 +142,8 @@ def evidence(job, choice):
                 "Sample size",
                 f"Only {trades} closed trades underpin this result. Individual trades can materially change win rate and average profit.",
             )
+    if info.get("warmup_sessions"):
+        add("Indicator warm-up", warmup_note(info))
     if info.get("profit_target_pct"):
         scores = result_html(job, "", str(hold), metrics_only=True)
         add("Profit target", f"The {info['profit_target_pct']:g}% target was reached in {scores['wins']} of "

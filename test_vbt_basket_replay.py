@@ -39,7 +39,9 @@ class RangeSubmission(unittest.TestCase):
             (root / "strategy.py").write_text(
                 "def finviz_signals(tickers, day, cache):\n"
                 "    assert max(cache['history']) == day\n"
-                "    return [dict(Ticker=s, Status='BUY' if s=='ANF' or day.endswith('10') else 'WAIT') for s in tickers]\n"
+                "    n = len(cache['history'])\n"
+                "    return [dict(Ticker=s, Status='ERROR', Error=f'Insufficient history ({n} candles); need at least 3')\n"
+                "            if s == 'CCCC' and n < 3 else dict(Ticker=s, Status='BUY' if s=='ANF' or day.endswith('10') else 'WAIT') for s in tickers]\n"
             )
             manager = SimpleNamespace(
                 results_dir=root,
@@ -74,6 +76,7 @@ class RangeSubmission(unittest.TestCase):
                     )
                     data = service.call_args.args[1]
                     self.assertEqual(data["profit_target_pct"], 2)
+                    self.assertEqual(data["warmup_sessions"], {"CCCC": 2} if "CCCC" in expected else {})
                     self.assertEqual(list(data["series"]), expected)
                     self.assertEqual(data["observed_days"], len(days))
                     for s, bars in data["series"].items():

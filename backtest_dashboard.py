@@ -161,6 +161,14 @@ def facts(pairs):
     )
 
 
+def warmup_note(info):
+    warmup = info.get("warmup_sessions") or {}
+    if not warmup:
+        return ""
+    counts = [f"{name} ({count} session{'s' if count != 1 else ''})" for name, count in warmup.items()]
+    return "The strategy held cash during indicator warm-up for " + ", ".join(counts) + "."
+
+
 def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     info = job["inputs"]
     result = job["result"]
@@ -313,6 +321,8 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             ),
             "half",
         )
+    if info.get("warmup_sessions"):
+        context += f"<p class='muted'>{e(warmup_note(info))}</p>"
     if target is not None:
         context += (f"<p class='muted'>Profit target {e(f'{target:g}')}%. A win reaches the target during the hold. "
                     "Net P/L uses the scheduled exit price.</p>")

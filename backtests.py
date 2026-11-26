@@ -98,7 +98,7 @@ def replay(st, meta, cache, symbol, sessions):
                 if isinstance(buys, dict)
                 else set(buys)
             )
-            return signals, set(result["days"]), version
+            return signals, set(result["days"]), version, result["warmup_sessions"]
     finally:
         _REPLAY_SLOT.release()
 
@@ -215,7 +215,7 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
             )
         )
         snapshot.chmod(0o644)
-        buys, days, version = replay(
+        buys, days, version, warmup_sessions = replay(
             manager, dict(meta, asof=expected[-1]), snapshot, symbol, len(expected)
         )
     if days != set(expected):
@@ -234,7 +234,7 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
         ]
         for ticker, key in keys.items()
     }
-    return (series[symbol] if isinstance(symbol, str) else series), version
+    return (series[symbol] if isinstance(symbol, str) else series), version, warmup_sessions
 
 
 def dataset(
@@ -282,7 +282,7 @@ def dataset(
     snapshot = json.loads(cache.read_text())
     history = snapshot["history"]
     if interval is not None:
-        bars, version = calendar_replay(
+        bars, version, warmup_sessions = calendar_replay(
             manager,
             meta,
             cache,
@@ -304,6 +304,7 @@ def dataset(
             holds=holds,
             fee_bps=fee,
             source="Historical date-range replay",
+            warmup_sessions=warmup_sessions,
         )
     bars = []
     for day, prices in sorted(history.items()):
@@ -324,7 +325,7 @@ def dataset(
     if not 4 <= len(bars) <= 3000:
         raise ValueError("Choose a symbol with 4–3000 daily bars in the selected run.")
     if sessions is not None:
-        signal_days, evaluated, version = replay(manager, meta, cache, symbol, sessions)
+        signal_days, evaluated, version, warmup_sessions = replay(manager, meta, cache, symbol, sessions)
         bars = [
             dict(bar, signal=bar["day"] in signal_days)
             for bar in bars
@@ -342,6 +343,7 @@ def dataset(
             holds=holds,
             fee_bps=fee,
             source="Historical Python replay",
+            warmup_sessions=warmup_sessions,
         )
     by_day = {bar["day"]: (bar, nxt) for bar, nxt in zip(bars, bars[1:])}
     observed = set()

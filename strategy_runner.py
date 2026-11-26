@@ -458,6 +458,8 @@ def replay_daily(a) -> int:
     dates = [d for d in sorted(history) if d <= a.asof and keys.issubset(history[d])]
     dates = set(dates[-a.sessions :])
     buys = {symbol: [] for symbol in symbols}
+    evaluated = set()
+    warmup_sessions = {}
     past = {}
     for day in sorted(history):
         if day > a.asof:
@@ -475,11 +477,18 @@ def replay_daily(a) -> int:
         if not isinstance(rows, list):
             raise ValueError("The strategy did not return a signal list.")
         has_status = any("Status" in row for row in rows)
+        warming = set()
         for row in rows:
             symbol = str(row.get("Ticker", "")).upper()
             if symbol not in buys:
                 continue
             status = str(row.get("Status", "")).strip().upper()
+            if status == "ERROR" and symbol not in evaluated:
+                warmup = re.fullmatch(r"Insufficient history \((\d+) (?:\d+-day )?candles\); need at least (\d+)",
+                                      str(row.get("Error", "")).strip())
+                if warmup and int(warmup[1]) < int(warmup[2]):
+                    warming.add(symbol)
+                    continue
             if status in {"ERROR", "NOT IN PRICE CACHE"}:
                 raise ValueError(
                     f"Strategy could not evaluate {symbol} on {day}: {row.get('Error') or status}"
@@ -487,8 +496,11 @@ def replay_daily(a) -> int:
             if not has_status or status in {"BUY", "BUY SIGNAL", "SIGNAL"}:
                 if not buys[symbol] or buys[symbol][-1] != day:
                     buys[symbol].append(day)
+        evaluated.update(set(symbols) - warming)
+        for symbol in warming:
+            warmup_sessions[symbol] = warmup_sessions.get(symbol, 0) + 1
     signals = buys if len(symbols) > 1 else buys[symbols[0]]
-    Path(a.output).write_text(json.dumps({"buys": signals, "days": sorted(dates)}))
+    Path(a.output).write_text(json.dumps({"buys": signals, "days": sorted(dates), "warmup_sessions": warmup_sessions}))
     return 0
 
 

@@ -9,6 +9,24 @@ from strategy_runner import replay_daily
 
 
 class HistoricalSignals(unittest.TestCase):
+    def test_replay_reports_unrelated_errors_and_late_history_loss(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache = root / "history.json"
+            cache.write_text(json.dumps({"history": {f"2026-11-0{d}": {"ABC": {}} for d in range(2, 6)}}))
+            args = SimpleNamespace(strategy="fixture.py", cache=str(cache), symbol="ABC",
+                                   asof="2026-11-05", sessions=4, output=str(root / "result.json"), candle_label=None)
+            for failure_day, error in (("2026-11-02", "High below low"),
+                                       ("2026-11-04", "Insufficient history (2 candles); need at least 48")):
+                def strategy(symbols, day, data):
+                    return [{"Ticker": "ABC", "Status": "ERROR" if day == failure_day else "WAIT", "Error": error}]
+
+                with patch("strategy_runner._import", return_value=SimpleNamespace(finviz_signals=strategy)):
+                    with self.assertRaisesRegex(ValueError, "Strategy could not evaluate ABC on " + failure_day):
+                        replay_daily(args)
+
     def test_blocks_late_archived_signals_and_other_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -167,10 +185,10 @@ class CalendarReplayTests(unittest.TestCase):
                 self.assertEqual(max(data), "2026-10-30")
                 self.assertIn("2026-09-25", data)
                 self.assertEqual(count, 22)
-                return {october[1]}, set(october), "v1"
+                return {october[1]}, set(october), "v1", {}
 
             with patch("backtests.replay", check):
-                bars, _ = calendar_replay(
+                bars, _, _ = calendar_replay(
                     SimpleNamespace(finviz=None),
                     {"asof": "2026-11-03"},
                     cache,
