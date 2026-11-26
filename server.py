@@ -2877,6 +2877,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     job = backtests.service("/jobs/" + match[1])
                     return self._html(200, backtests.result_html(job, path, urllib.parse.parse_qs(parts.query).get("hold", [""])[0]))
+                except backtests.JobNotFound as exc:
+                    return self._text(404, str(exc))
                 except ValueError as exc:
                     return self._text(503, str(exc))
             if path == "/strategies/archive":
@@ -2957,7 +2959,8 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return self._text(400, "Bad request.")
-        limit = 160000 if path == "/notebook/save" else 12_000_000 if path in upload_routes else (65536 if path == "/notes/save" else 16384)
+        limit = (160000 if path in ("/notebook/save", "/vectorbt/run") else 12_000_000 if path in upload_routes
+                 else (65536 if path == "/notes/save" else 16384))
         if length < 0 or length > limit:
             self.close_connection = True
             return self._text(413, "Request too large.")

@@ -230,7 +230,8 @@ class Base(unittest.TestCase):
         self.results.mkdir(parents=True)
         self.logs = []
         self.env = {"TV_OAUTH_BASE": base + "/oauth", "TV_MCP_URL": base + "/mcp", "TV_MIN_INTERVAL": "0",
-                    "RAILWAY_PUBLIC_DOMAIN": "agent.example.app", "TV_LIST_MODE": self.MODE}
+                    "RAILWAY_PUBLIC_DOMAIN": "agent.example.app", "TV_LIST_MODE": self.MODE,
+                    "TV_SYNC_AT": "asap"}
         self.busy = False
         self.sync = self.make()
 

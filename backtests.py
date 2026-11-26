@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import re
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from backtest_dashboard import result_html as result_html
 
 
 _REPLAY_SLOT = threading.BoundedSemaphore(1)
+REPLAY_TIMEOUT = 300  # Seconds. Long ranges with indicator warm-up history took about 45 seconds in production.
+
+
+def replay_timeout(manager, env=os.environ):
+    """Seconds one historical replay may run: VBT_REPLAY_TIMEOUT_SEC (30–900) or five minutes,
+    and never longer than a normal strategy run."""
+    try:
+        limit = max(30, min(900, int(env.get("VBT_REPLAY_TIMEOUT_SEC") or REPLAY_TIMEOUT)))
+    except ValueError:
+        limit = REPLAY_TIMEOUT
+    return min(limit, manager.timeout)
 
 
 TARGET_SESSIONS = 7
@@ -86,7 +98,7 @@ def replay(st, meta, cache, symbol, sessions):
             ]
             if strategy.get("candles"):
                 args += ["--candle-label", sm.candles_label("1d")]
-            timeout = min(90, st.timeout)
+            timeout = replay_timeout(st)
             code, _ = sm.run_sandboxed(args, work, log, timeout, timeout, st.mem_mb)
             symbol_count = 1 if isinstance(symbol, str) else len(symbol)
             if code or output.stat().st_size > 20000 * symbol_count:
@@ -414,6 +426,10 @@ def submit_job(data, started):
     return service("/jobs", data)["id"]
 
 
+class JobNotFound(ValueError):
+    """The service answered, but it has no job or run with this ID."""
+
+
 def service(path, data=None):
     url = os.environ["VBT_SERVICE_URL"].rstrip("/") + path
     req = urllib.request.Request(
@@ -427,6 +443,12 @@ def service(path, data=None):
     try:
         with urllib.request.urlopen(req, timeout=12) as response:
             return json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise JobNotFound("This backtest was not found. It may have been removed.") from exc
+        raise ValueError(
+            "The backtest service is unavailable. Check the private service connection."
+        ) from exc
     except OSError as exc:
         raise ValueError(
             "The backtest service is unavailable. Check the private service connection."

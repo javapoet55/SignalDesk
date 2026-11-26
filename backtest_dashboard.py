@@ -209,6 +209,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     target = info.get("profit_target_pct")
     rows = []
     row_pnl = []
+    row_values = []  # Unformatted entry price, exit price, net P/L and return for exports.
     row_hits = []
     fills = []
     benchmark = None
@@ -231,6 +232,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             complete = isinstance(v, (float, int))
             pnl = allocation * v / 100 if complete else None
             row_pnl.append(pnl)
+            row_values.append((buy, sell, pnl, v if complete else None))
             if target is not None:
                 hits = result.get("target_hits", {}).get(sym)
                 row_hits.append(hits[idx] if hits else None)
@@ -297,6 +299,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         benchmark = full.get("benchmark")
         for t in fills:
             row_pnl.append(t["pnl"])
+            row_values.append((t["buy"], t["sell"], t["pnl"], t["pct"]))
             if target is not None:
                 row_hits.append(t.get("target_hit"))
             rows.append(
@@ -409,7 +412,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     if metrics_only:
         return dict(days=days, equity=equity, benchmark=benchmark, drawdown=dd, hold=hold,
                     start=start, end=end, total=total, sharpe=sharpe, maxdd=maxdd, rate=rate,
-                    annual=annual, trades=n, wins=win_count, losses=loss_count, rows=rows, row_pnl=row_pnl,
+                    annual=annual, trades=n, wins=win_count, losses=loss_count, rows=rows, row_pnl=row_pnl, row_values=row_values,
                     row_groups=row_groups, profit_target_pct=target, scored=scored, unscored=unscored,
                     avg_win=mean(wins), avg_loss=mean(losses), expectancy=mean(pnl),
                     profit_factor=(sum(wins) / -sum(losses) if losses else math.inf if wins else None),
