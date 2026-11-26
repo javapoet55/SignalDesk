@@ -37,7 +37,46 @@ def simulate(bars, hold, fee_bps):
     }
 
 
+def cohort_returns(data):
+    holds, elapsed, prices = data["holds"], data["elapsed"], data["prices"]
+    outcomes = {symbol: [] for symbol in prices}
+    for i, hold in enumerate(holds, 1):
+        completed = {}
+        for symbol, series in prices.items():
+            if not elapsed[0]:
+                status = "Pending entry"
+            elif series[0] is None:
+                status = "Entry price unavailable"
+            elif not elapsed[i]:
+                status = "Pending exit"
+            elif series[i] is None:
+                status = "Exit price unavailable"
+            else:
+                completed[symbol] = [series[0], series[i]]
+                status = None
+            outcomes[symbol].append(status)
+        if completed:
+            frame = pd.DataFrame(
+                completed, index=pd.to_datetime([data["dates"][0], data["dates"][i]])
+            )
+            entries = pd.DataFrame(False, index=frame.index, columns=frame.columns)
+            entries.iloc[0] = True
+            pf = vbt.Portfolio.from_signals(
+                frame,
+                entries=entries,
+                exits=~entries,
+                fees=data["fee_bps"] / 10000,
+                init_cash=100000,
+                cash_sharing=False,
+            )
+            for symbol, value in pf.total_return.items():
+                outcomes[symbol][-1] = float(value) * 100
+    return {"outcomes": outcomes, "engine": vbt.__version__}
+
+
 def calculate(data):
+    if "prices" in data:
+        return cohort_returns(data)
     bars, holds, fee = data["bars"], data["holds"], data["fee_bps"]
     if not 4 <= len(bars) <= 3000 or not 1 <= len(holds) <= 10:
         raise ValueError("Supply 4–3000 daily bars and 1–10 holding periods.")

@@ -27,6 +27,20 @@ class Research(BaseModel):
     observed_days: int = Field(ge=1, le=3000)
 
 
+class Cohort(BaseModel):
+    run: str = Field(max_length=200)
+    strategy: str = Field(max_length=150)
+    version: str = Field(max_length=64)
+    symbol: str = Field(max_length=15)
+    source: str
+    signal_day: str
+    dates: list[str] = Field(min_length=2, max_length=11)
+    elapsed: list[bool] = Field(min_length=2, max_length=11)
+    holds: list[int] = Field(min_length=1, max_length=10)
+    fee_bps: FiniteFloat = Field(ge=0, le=100)
+    prices: dict[str, list[FiniteFloat | None]] = Field(min_length=1, max_length=5000)
+
+
 def authorized(authorization: str = Header(default="")):
     if not secrets.compare_digest(
         authorization.encode(), ("Bearer " + os.environ["VBT_SERVICE_TOKEN"]).encode()
@@ -51,7 +65,7 @@ def health():
 
 
 @app.post("/jobs", dependencies=[Depends(authorized)], status_code=202)
-def submit(data: Research):
+def submit(data: Research | Cohort):
     return jobs.submit(uuid4(), data.model_dump())
 
 

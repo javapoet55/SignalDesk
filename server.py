@@ -2083,6 +2083,8 @@ def render_result(app: App, rid: str) -> Optional[str]:
 
     if (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN") and
             status == "ok" and meta.get("mode") == "close" and meta.get("candles", "1d") == "1d"):
+        buy_count = len(signal_tickers(d))
+        batch_button = (f" <button name='scope' value='all' formnovalidate>Backtest all {buy_count} buy signals</button>" if buy_count else "")
         out.append(f"<section class='runcard'><h2>VectorBT PRO backtest</h2><form method='post' action='/strategies/backtest'>"
                    f"<input type='hidden' name='rid' value='{e(rid)}'><label>Symbol <input name='symbol' required maxlength='15'></label> "
                    + ("<label>Signals <select name='source'><option value='archive'>Saved signals</option>"
@@ -2091,7 +2093,7 @@ def render_result(app: App, rid: str) -> Optional[str]:
                       if kind == "generic" else "") +
                    "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
                    "<label>Fee per side (basis points) <input type='number' name='fee' min='0' max='100' step='any' value='0'></label> "
-                   "<button>Run backtest</button></form><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
+                   f"<button>Run backtest</button>{batch_button}</form><p>The all-signals button tests the buys from this run at the next session open, using the holding periods and fee above.</p><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
                    "Python replay uses one fixed symbol and daily bars available through each evaluation date. "
                    "Enter at the following open and exit after the selected number of sessions. Days without a saved buy stay flat when out of position. "
                    "Compare holding periods on the first 70% of bars and validate the best on the final 30%. "
@@ -3153,6 +3155,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/strategies/backtest":
                     if not os.environ.get("VBT_SERVICE_URL") or not os.environ.get("VBT_SERVICE_TOKEN"):
                         raise ValueError("VectorBT PRO is not configured.")
+                    if form.get("scope") == "all":
+                        data = backtests.cohort(st, form.get("rid", ""), [int(h.strip()) for h in form.get("holds", "").split(",")],
+                                                float(form.get("fee", "0")), signal_tickers)
+                        job = backtests.service("/jobs", data)
+                        return self._redirect("/strategies/backtests/" + job["id"])
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
                         [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
                         int(form.get("sessions", "60")) if form.get("source") == "replay" else None)

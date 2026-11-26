@@ -83,3 +83,40 @@ class HistoricalSignals(unittest.TestCase):
             result = json.loads(output.read_text())
             self.assertEqual(result["buys"], ["2026-11-03"])
             self.assertEqual(result["days"], [f"2026-11-0{i}" for i in range(2, 6)])
+
+
+class BatchSignals(unittest.TestCase):
+    def test_entire_buy_list_waits_for_next_exchange_open(self):
+        import datetime as dt
+        from backtests import cohort
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rid = "2026-11-25_133104_fmfi_scanner"
+            folder = root / rid
+            folder.mkdir()
+            (folder / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "close",
+                        "strategy": "fmfi_scanner",
+                        "status": "ok",
+                        "asof": "2026-11-25",
+                        "finished_utc": "2026-11-25T21:32:00+00:00",
+                    }
+                )
+            )
+            manager = SimpleNamespace(
+                results_dir=root, finviz=SimpleNamespace(cache_dir=root)
+            )
+            request = cohort(
+                manager,
+                rid,
+                [1, 5, 10],
+                1,
+                lambda _: [f"S{i}" for i in range(125)],
+                now=dt.datetime.fromisoformat("2026-11-26T07:30:00+00:00"),
+            )
+            self.assertEqual(request["dates"][:2], ["2026-11-27", "2026-11-30"])
+            self.assertEqual(len(request["prices"]), 125)
+            self.assertFalse(any(request["elapsed"]))

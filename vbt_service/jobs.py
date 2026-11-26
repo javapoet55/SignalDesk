@@ -43,7 +43,8 @@ def submit(key, data):
 def lookup(key: UUID):
     with database() as db:
         row = db.execute(
-            "SELECT request-'bars', result, error FROM vbt_research WHERE id=%s", (key,)
+            "SELECT request-'bars'-'prices', result, error FROM vbt_research WHERE id=%s",
+            (key,),
         ).fetchone()
         return dict(inputs=row[0], result=row[1], error=row[2]) if row else None
 

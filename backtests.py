@@ -226,6 +226,8 @@ def result_html(job, refresh_path):
             top
             + f"<p>Queued or running.</p><a href='{e(refresh_path)}'>Refresh result</a></main></html>"
         )
+    if "outcomes" in r:
+        return top + cohort_html(info, r)
     full = r["full_period"]
     equity = full["equity"]
     low, high = min(equity), max(equity)
@@ -267,4 +269,108 @@ def result_html(job, refresh_path):
         f"<svg viewBox='0 0 800 180' role='img' aria-label='Full-period equity curve'><polyline points='{points}' "
         f"fill='none' stroke='#278673' stroke-width='3'/></svg><p>Starting cash $100,000. Final equity ${equity[-1]:,.2f}. "
         f"Fee {info['fee_bps']:g} basis points per side.</p></main></html>"
+    )
+
+
+def cohort(manager, rid, holds, fee, signal_tickers, now=None):
+    """Freeze the exact buy list, then look up observed opens on the required sessions."""
+    import finviz_prices
+    from paper_trading.market import exchange
+
+    if not sm.RESULT_RE.fullmatch(rid):
+        raise ValueError("Select a valid strategy run.")
+    folder = manager.results_dir / rid
+    meta = sm.read_meta(folder)
+    if (
+        folder.is_symlink()
+        or meta.get("status") != "ok"
+        or meta.get("mode") != "close"
+        or meta.get("candles", "1d") != "1d"
+        or not meta.get("finished_utc")
+        or not meta.get("asof")
+    ):
+        raise ValueError("Select a completed daily close run.")
+    holds = list(dict.fromkeys(holds))
+    if (
+        not 1 <= len(holds) <= 10
+        or any(not 1 <= h <= 252 for h in holds)
+        or not 0 <= fee <= 100
+    ):
+        raise ValueError(
+            "Use 1–10 holding periods of 1–252 sessions and fees of 0–100 basis points."
+        )
+    symbols = list(dict.fromkeys(s.strip().upper() for s in signal_tickers(folder)))
+    if not symbols or len(symbols) > 5000:
+        raise ValueError("Select a run with 1–5,000 buy symbols.")
+    if not manager.finviz or meta.get("price_source", "finviz") != "finviz":
+        raise ValueError("Batch signal outcomes require a Finviz daily-price run.")
+    now = now or dt.datetime.now(dt.timezone.utc)
+    finished = dt.datetime.fromisoformat(meta["finished_utc"])
+    cal = exchange()
+    entry = cal.next_session(cal.date_to_session(meta["asof"], direction="previous"))
+    while cal.session_open(entry) <= finished:
+        entry = cal.next_session(entry)
+    sessions = [entry] + [cal.session_offset(entry, h) for h in holds]
+    dates = [s.date().isoformat() for s in sessions]
+    elapsed = [cal.session_open(s) <= now for s in sessions]
+    prices = {}
+    for symbol in symbols:
+        bars = {}
+        if elapsed[0] and re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", symbol):
+            for candidate in dict.fromkeys(
+                [symbol, symbol.replace("-", "."), symbol.replace(".", "-")]
+            ):
+                path = manager.finviz.cache_dir / (candidate + ".csv")
+                if sm.regular_file(path, manager.finviz.cache_dir):
+                    try:
+                        bars, _ = finviz_prices.parse_quote_csv(path.read_text())
+                    except (OSError, ValueError, finviz_prices.FinvizPriceError):
+                        continue
+                    if bars:
+                        break
+        values = [
+            bars.get(day, {}).get("o") if ready else None
+            for day, ready in zip(dates, elapsed)
+        ]
+        prices[symbol] = [
+            v if v is not None and math.isfinite(v) and v > 0 else None for v in values
+        ]
+    return dict(
+        run=rid,
+        strategy=meta["strategy"],
+        version=meta.get("strategy_sha256") or "unversioned archive",
+        symbol=f"{len(symbols)} buys",
+        source="Run buy signals",
+        holds=holds,
+        fee_bps=fee,
+        dates=dates,
+        elapsed=elapsed,
+        prices=prices,
+        signal_day=meta["asof"],
+    )
+
+
+def cohort_html(info, result):
+    import html
+
+    esc = html.escape
+    holds = info["holds"]
+    headers = "".join(
+        f"<th>{h}-session return<br>{esc(day)}</th>"
+        for h, day in zip(holds, info["dates"][1:])
+    )
+    rows = []
+    for symbol, values in result["outcomes"].items():
+        cells = "".join(
+            f"<td>{v:.2f}%</td>"
+            if isinstance(v, (int, float))
+            else f"<td>{esc(v)}</td>"
+            for v in values
+        )
+        rows.append(f"<tr><th>{esc(symbol)}</th>{cells}</tr>")
+    return (
+        f"<p>{len(rows)} buy signals from {esc(info['signal_day'])}. Entry session: {esc(info['dates'][0])}. "
+        f"Fee: {info['fee_bps']:g} basis points per side. Each return is an independent open-to-open trade.</p>"
+        "<p>Run the batch again from the original strategy result after later daily prices are saved to update outcomes.</p>"
+        f"<table><tr><th>Symbol</th>{headers}</tr>{''.join(rows)}</table></main></html>"
     )
