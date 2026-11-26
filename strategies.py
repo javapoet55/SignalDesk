@@ -1116,7 +1116,7 @@ class StrategyManager:
             shutil.rmtree(folder)
         return "Run history deleted, including its result files and log."
 
-    def results(self, limit: int = 100) -> List[dict]:
+    def results(self, limit: Optional[int] = 100) -> List[dict]:
         out = []
         for p in sorted(self.results_dir.iterdir(), key=lambda p: p.name, reverse=True)[:limit]:
             if p.is_dir() and RESULT_RE.match(p.name):

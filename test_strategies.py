@@ -470,7 +470,7 @@ class TestStrategiesWeb(unittest.TestCase):
         r, body = self.req("GET", "/strategies")
         self.assertEqual(r.status, 200)
         page = body.decode()
-        for text in ("aria-label='Portal modules'", "Your strategies", "Upload strategy", "Daily prices (Massive)", "59 trading days"):
+        for text in ("aria-label='Portal modules'", "Select Strategies", "Upload Strategy", "Daily prices (Massive)", "59 trading days"):
             self.assertIn(text, page)
         r, body = self.req("GET", "/")
         self.assertIn(b"href='/strategies'", body)

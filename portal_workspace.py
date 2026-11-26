@@ -1,10 +1,12 @@
 """Shared authenticated portal navigation and strategy workspace presentation."""
 from html import escape
 
+import strategy_design as design
+
 SECTIONS = (
-    ("library", "Strategy Library"), ("configure", "Run Configuration"),
-    ("scheduled", "Scheduled Runs"), ("history", "Run History"),
-    ("backtests", "VectorBT PRO"), ("settings", "Settings"),
+    ("configure", "Configure & Run"), ("scheduled", "Run Activity"),
+    ("history", "Results & Signals"), ("backtests", "Backtest History"),
+    ("versions", "Version History"), ("settings", "Settings"),
 )
 ICONS = {
     "scans": "M3 5h18l-7 8v6l-4 2v-8z",
@@ -18,12 +20,14 @@ ICONS = {
 }
 
 
-def subnav(current="library"):
+def subnav(current="configure"):
     items = []
     for key, title in SECTIONS:
         url = "/strategies/backtests" if key == "backtests" else "/strategies?tab=" + key
+        if key == "versions":
+            url = "/strategies/archive"
         active = " aria-current='page'" if current == key else ""
-        items.append(f"<a href='{url}' data-workspace-tab='{key}'{active}>{title}</a>")
+        items.append(f"<a href='{url}' data-workspace-tab='{key}'{active}>{design.icon(key)}{escape(title)}</a>")
     return "<nav class='studio-tabs' aria-label='Strategy workspace'>" + "".join(items) + "</nav>"
 
 
@@ -34,6 +38,8 @@ def section_links(module, sections):
 
 
 def shell(tabs, active, controls):
+    if active == "strategies":
+        return "<style>" + CSS + "</style>" + design.header(tabs, controls)
     links = []
     title = "Account"
     for key, url, label in tabs:
@@ -143,25 +149,41 @@ SCRIPT = r"""
       backtests.innerHTML = "Historical simulations could not be loaded. <a href='/strategies/backtests'>Retry</a>";
     } finally { loading = false; }
   }
-  function preview() {
-    const chosen = all('.srow input:checked').map(box => box.closest('.srow').querySelector('.t1').textContent);
-    one('#library-count').textContent = chosen.length + ' selected';
-    if (!one('#run-preview')) return;
-    const terms = [...form.querySelectorAll('.top2 select')].map(select => select.selectedOptions[0]?.textContent);
-    for (const field of form.querySelectorAll('.top2 input')) {
-      if (field.value) terms.push(field.closest('label')?.firstChild.textContent.trim() + ' ' + field.value);
-    }
-    one('#run-preview').textContent = [chosen.join(', ') || 'Select strategies in the library', ...terms].join(' · ');
+  const versions = document.createElement('section');
+  versions.dataset.panel = 'versions';
+  page.append(versions);
+  async function loadVersions() {
+    if (versions.childElementCount || versions.dataset.loading) return;
+    versions.dataset.loading = 'true';
+    versions.textContent = 'Loading version history…';
+    try {
+      const response = await fetch('/strategies/archive');
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const records = doc.querySelector('#version-records');
+      if (!response.ok || !records) throw Error();
+      versions.replaceChildren(records);
+    } catch {
+      versions.innerHTML = "Could not load versions. <a href='/strategies/archive'>Open version history</a>";
+    } finally { delete versions.dataset.loading; }
+  }
+  one('#scan-fold').onclick = event => {
+    const folded = one('.top2').classList.toggle('folded');
+    event.currentTarget.setAttribute('aria-expanded', !folded);
+  };
+  function selectSchedule(value) {
+    const radio = form.querySelector('input[name=when][value="' + value + '"]');
+    if (radio) { radio.checked = true; radio.dispatchEvent(new Event('input', {bubbles:true})); }
   }
   function show() {
     let view = new URLSearchParams(location.search).get('tab');
     if (location.pathname === '/strategies/backtests') view = 'backtests';
-    if (['#activity','#results'].includes(location.hash)) view = 'history';
+    if (location.hash === '#results') view = 'history';
+    if (location.hash === '#activity') view = 'scheduled';
     if (location.hash === '#go') view = 'configure';
     if (location.hash === '#data') view = 'settings';
-    if (!names.has(view)) view = 'library';
+    if (!names.has(view)) view = 'configure';
     page.dataset.view = view;
-    one('#studio-title').textContent = names.get(view);
+
     all('[data-panel]').forEach(node => node.hidden = !node.dataset.panel.split(' ').includes(view));
     const previewPanel = one('.selbar');
     if (previewPanel) {
@@ -173,41 +195,41 @@ SCRIPT = r"""
         panelHome.after(previewPanel);
       }
     }
-    if (one('#preview-title')) one('#preview-title').textContent = view === 'scheduled' ? 'Schedule selected strategies' : 'Run preview';
+
     if (view === 'backtests') backtests.style.marginTop = '16px';
     if (view === 'settings') one('#data').open = true;
     if (view === 'backtests') loadBacktests();
+    if (view === 'versions') loadVersions();
     tabs.forEach(tab => {
       if (tab.dataset.workspaceTab === view) tab.setAttribute('aria-current','page');
       else tab.removeAttribute('aria-current');
     });
-    preview();
+
   }
   document.addEventListener('click', event => {
     const tab = event.target.closest('[data-workspace-tab]');
     if (!tab || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
     const key = tab.dataset.workspaceTab;
+
+    event.preventDefault();
     history.pushState(null,'','/strategies?tab=' + key);
     show();
     if (!tabs.includes(tab)) tabs.find(link => link.dataset.workspaceTab === key).focus();
   });
   addEventListener('popstate', show);
   addEventListener('hashchange', show);
-  form.addEventListener('input', preview);
-  form.addEventListener('change', preview);
+
   one('#schedule-toggle').disabled = !runPanel;
   one('#schedule-toggle').onclick = event => {
     scheduleOpen = !scheduleOpen;
     event.currentTarget.setAttribute('aria-expanded',scheduleOpen);
     if (scheduleOpen && form.elements.when?.value === 'now') {
-      form.elements.when.value = 'weekdays';
-      form.elements.when.dispatchEvent(new Event('input', {bubbles:true}));
+      selectSchedule('weekdays');
     }
     show();
     if (scheduleOpen && runPanel) {
       scheduleDialog.showModal();
-      form.elements.when.focus();
+      form.querySelector('input[name=when]:checked')?.focus();
     }
   };
   function search(id, selector) {
@@ -217,6 +239,20 @@ SCRIPT = r"""
     field.onkeydown = event => { if (event.key === 'Enter') event.preventDefault(); };
   }
   search('#strategy-search','.srow');
+  one('#find-strategy').onclick = () => {
+    const search = one('#strategy-search');
+    search.hidden = !search.hidden;
+    if (!search.hidden) search.focus();
+    else { search.value = ''; search.dispatchEvent(new Event('input')); }
+  };
+  page.addEventListener('click', async event => {
+    const button = event.target.closest('[data-copy-name]');
+    if (!button) return;
+    try {
+      await navigator.clipboard.writeText(button.dataset.copyName);
+      button.title = 'Copied filename';
+    } catch { window.prompt('Copy strategy filename', button.dataset.copyName); }
+  });
   search('#schedule-search',"section[data-panel=scheduled] tbody tr");
   const detail = document.createElement('dialog');
   detail.className = 'studio-detail';

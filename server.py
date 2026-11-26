@@ -73,6 +73,7 @@ import journal_chart as jc
 import trading_notes as tn
 import notebook as nb
 import portal_workspace as studio
+import strategy_design as design
 import open_trade_marks as otm  # noqa: E402  interactive journal performance explorer
 import email.parser  # noqa: E402
 import email.policy  # noqa: E402
@@ -962,7 +963,7 @@ def render_scan_card(app: App, now: dt.datetime, running: bool) -> str:
 
 _SCAN_JS = r"""
 var f=document.getElementById('scango');if(!f)return;var dirty=false,running=__RUNNING__;
-var when=document.getElementById('when'),dl=document.getElementById('dl'),tl=document.getElementById('tl'),
+var when=f.elements.when,dl=document.getElementById('dl'),tl=document.getElementById('tl'),
 tz=document.getElementById('tz'),date=document.getElementById('date'),time=document.getElementById('time'),
 btn=document.getElementById('gobtn'),sum=document.getElementById('sum');
 function tzLabel(){try{var d=new Date((date.value||'2000-01-01')+'T'+(time.value||'12:00')+':00Z');
@@ -1355,20 +1356,21 @@ def render_strategies(app: App) -> str:
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Strategies</title>",
         _THEME_INIT + f"<style>{_CSS}{_STRAT_CSS}{_JOURNAL_DESIGN_CSS}{_DASHBOARD_THEME_CSS}{_STRATEGIES_THEME_CSS}</style></head><body class='journal-app dashboard-app strategies-app'><main>", render_tabs("strategies"),
-        studio.subnav(), "<div class='studio-page'><h1 id='studio-title'>Strategy Library</h1>",
+
     ]
     jobs = app.schedules.jobs("strategies") if app.schedules else []
     upcoming = [j for j in jobs if j["status"] == "scheduled"]
     missed = [j for j in jobs if j["status"] == "missed"]
-    results = st.results(50)  # Recent archive window used by the original dashboard.
+    archive = st.results(None)
+    results = archive[:50]
     last_by_name = {}
-    for record in results:
+    for record in archive:
         last_by_name.setdefault(record.get("strategy"), record)
-    out.append("<div class='studio-stats' data-panel='library'>"
-               f"<div>Strategies<strong>{len(strategies)}</strong></div>"
-               f"<div>Time schedules<strong>{len(upcoming)}</strong></div>"
-               f"<div>After-scan strategies<strong>{len(auto['names'])}</strong></div>"
-               f"<div>Successful runs (latest {len(results)})<strong>{sum(r.get('status') == 'ok' for r in results)}</strong></div></div>")
+    completed = [record for record in archive if record.get("status") == "ok"]
+    signals = sum(count for record in completed for key, count in record.get("counts", {}).items()
+                  if key in BUY_STATUSES or key == "rows")
+    out.extend([design.overview((len(strategies), len(upcoming), len(completed), signals)),
+                studio.subnav(), "<div class='studio-page' data-view='configure'>"])
     if st.price_source == "massive" and st.client is None:
         out.append("<div class='warn'>MASSIVE_API_KEY is not set, so there are no prices to run strategies on.</div>")
     if st.price_source == "finviz" and st.finviz is None:
@@ -1391,65 +1393,63 @@ def render_strategies(app: App) -> str:
         f"placeholder='Any' value='{e(str(saved_filters.get(key, '')), quote=True)}'></label>"
         for key, label in sm.UNIVERSE_FIELDS
     )
-    out.append("<form id='go' method='post' action='/strategies/go'>")
+    out.append("<form id='go' method='post' action='/strategies/go'><div class='sd-left' data-panel='configure'>")
     out.append(
-        "<div class='card top2' data-panel='configure'><h2>Scan &amp; data settings</h2>"
+        "<div class='card top2' data-panel='configure'><h2><button id='scan-fold' class='sd-fold' type='button' aria-expanded='true'>⌄ &nbsp; Scan &amp; Data Settings</button></h2>"
         f"<label>Ticker source<select name='scan'>{opt(scan_opts, sel_scan)}</select></label>"
         "<label>Price basis<select name='mode'>"
         + opt([("close", "Latest close"), ("intraday", "Include today's intraday bar")], sel_mode)
         + "</select></label>"
         + _candles_picker(sel.get("candles", "1d"), [n for n, m in strategies if m.get("candles") is True])
-        + "<div><div class='muted' style='font-size:13px'>Price data</div><div>"
-        + ("FinViz Elite" if st.price_source == "finviz" else "Massive") + "</div></div>"
+        + "<label>Price data<select disabled aria-label='Configured price data provider'><option>"
+        + ("FinViz Elite" if st.price_source == "finviz" else "Massive") + "</option></select></label>"
         + _candles_hint([n for n, m in strategies if m.get("candles") is True])
         + "<fieldset class='run-filters'><legend>Optional ticker filters</legend>" + filter_fields
-        + "<small>Uses values from the selected scan. Leave a bound blank for no limit. "
-          "Market cap is in millions (1,000 = $1 billion). Missing values are excluded when a filter is set.</small>"
-          "</fieldset></div>")
+        + "</fieldset></div>")
 
-    out.append("<div class='studio-actions' data-panel='library'><label class='studio-search'>Find a strategy<input type='search' id='strategy-search' placeholder='Name, filename or type'></label><button type='button' onclick=\"document.getElementById('upfile').click()\">Upload strategy</button></div><div class='card slist' data-panel='library'><div class='shead'><div><span class='v'>Your strategies</span> "
-               f"<span class='muted'>{len(strategies)}</span></div>"
-               + ("<label class='inline' style='display:flex;gap:8px;align-items:center'>"
-                  "<input type='checkbox' id='all' style='width:18px;height:18px;accent-color:var(--accent)'>"
-                  " Select all</label>" if strategies else "") + "</div>")
+    out.append("<section class='card slist'><div class='shead'><b>Select Strategies</b>"
+               f"<small id='cnt'>{len(chosen)} of {len(strategies)} selected</small>"
+               "<span class='sd-buttons'><button type='button' id='find-strategy' aria-label='Find a strategy' title='Find a strategy'>⌕</button>"
+               "<button type='button' class='btn2' onclick=\"document.getElementById('upfile').click()\">＋ Upload Strategy</button>"
+               "<label class='inline'><input type='checkbox' id='all'> Select All</label></span></div>"
+               "<input hidden type='search' id='strategy-search' aria-label='Find a strategy' placeholder='Name, filename or type'>"
+               "<div class='sd-rows'><div class='sd-columns'><input id='row-all' aria-label='Select all strategy rows' type='checkbox'><span>Strategy Name</span><span>Type</span>"
+               "<span>Last Run</span><span>Last Signals</span><span>Actions</span></div>")
     if not strategies:
         out.append("<p class='muted' style='padding:0 16px'>No strategies yet. Use Upload strategy below.</p>")
     for name, m in strategies:
         kind = {"v5": "V5-style", "script": "Script"}.get(m.get("kind"), "Custom")
         last = last_by_name.get(name, {})
-        recent = (_fmt_short(last.get("started_utc"), s.tz) + " · " + _counts_text(last.get("counts", {}))) if last else ""
+
         on = name in chosen
         out.append(
             f"<label class='srow{' on' if on else ''}'>"
             f"<input type='checkbox' name='s' value='{e(name, quote=True)}'{' checked' if on else ''}>"
-            f"<span class='nm'><div class='t1'>{e(_pretty_name(name))}</div><div class='t2'>{e(m['file'])}</div><small>{e(recent)}</small></span>"
+            f"<span class='nm'><div class='t1'>{e(_pretty_name(name))}</div><div class='t2'>{e(m['file'])}</div></span><span>"
             + ("<span class='tag'>auto</span>" if name in auto["names"] else "")
-            + f"<span class='tag'>{kind}</span>"
+            + f"<span class='tag'>{kind}</span></span><span>{e(_fmt_short(last.get('started_utc'), s.tz))}</span>"
+            + f"<span>{e(_counts_text(last.get('counts', {})))}</span><span class='sd-actions'>"
             + _tv_controls(name, m)
             + f"<button type='button' class='ghost strategy-note' hidden data-name='{e(name, quote=True)}' "
               f"data-label='{e(_pretty_name(name), quote=True)}' data-note='{e(m.get('note', ''), quote=True)}' "
               f"aria-label='Edit note for {e(_pretty_name(name), quote=True)}' title='Strategy note'>"
               "<svg width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' aria-hidden='true'>"
               "<path d='M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9M16 3l5 5-9 9-5 1 1-5Z'/></svg></button>"
+            + f"<button type='button' class='ghost' data-copy-name='{e(m['file'], quote=True)}' title='Copy filename' "
+              f"aria-label='Copy filename for {e(_pretty_name(name), quote=True)}'>{design.icon('copy')}</button>"
             # type=button (not submit) so pressing Enter in the run form can never trigger a delete;
             # the page script confirms, then posts the separate delete form below. Hidden until it runs.
             + f"<button type='button' class='ghost del' hidden data-name='{e(name, quote=True)}' "
               f"data-label='{e(_pretty_name(name), quote=True)}' aria-label='Delete {e(_pretty_name(name), quote=True)}'>"
               "<svg width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' aria-hidden='true'>"
-              "<path d='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'/></svg></button></label>")
-    out.append("</div><div class='studio-actions' data-panel='library'><span id='library-count'></span>"
-               "<a class='btn2' href='/strategies?tab=configure' data-workspace-tab='configure'>Continue to Run Configuration →</a></div>")
+              "<path d='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'/></svg></button></span></label>")
+    out.append("</div></section></div><aside class='sd-right' data-panel='configure'>")
     if not strategies:
-        out.append("<p data-panel='configure scheduled'>Upload a strategy in the Strategy Library to configure a run.</p>")
+        out.append("<section class='card'><h2>Run Schedule</h2><p>Upload a strategy to configure a run.</p></section>")
     if strategies:
         out.append(
-            "<div class='selbar' data-panel='configure scheduled'><h2 id='preview-title'>Run preview</h2><p class='studio-preview' id='run-preview'></p>"
-            f"<div class='cnt' id='cnt'>{len(chosen)} of {len(strategies)} selected</div>"
-            "<div class='muted' style='font-size:13px'>Shared scan and prices apply to every selection.</div>"
-            "<div class='when'>"
-            "<label>Run schedule<select name='when' id='when'>"
-            + opt([("now", "Run now"), ("once", "Schedule for later"), ("weekdays", "Every weekday")], sel_when)
-            + "</select></label>"
+            f"<div class='selbar' data-panel='configure scheduled'><h2>{design.icon('calendar')} Run Schedule</h2>"
+            "<div class='when'>" + design.schedule_options(sel_when) +
             f"<label id='dl'>Date<input type='date' name='date' id='date' value='{default_at:%Y-%m-%d}' "
             f"min='{local_now:%Y-%m-%d}'></label>"
             # one or more times: each becomes its own scheduled run (cancel any of them on its own)
@@ -1460,7 +1460,19 @@ def render_strategies(app: App) -> str:
             "<button type='button' id='addtime' class='btn2 tadd' hidden>+ Add time</button>"
             f"<span class='tz' id='tz'>{e(_tz_label(s.tz, default_at))}</span>"
             "<span class='go'><button type='submit' id='gobtn'>Run strategies</button></span></div>"
-            "<div class='muted' id='sum' style='font-size:13px;margin-top:8px'></div></div>")
+            "<span class='vis' id='sum'></span></div>")
+    out.append(f"<section class='card'><h2>{design.icon('calendar')} Next Scheduled Runs"
+               "<a href='/strategies?tab=scheduled' data-workspace-tab='scheduled'>View All</a></h2>")
+    dated = sorted(((app.schedules.next_fire(job), job) for job in upcoming), key=lambda item: item[0])
+    for at, job in dated[:2]:
+        names_text = ", ".join(_pretty_name(n) for n in job["names"])
+        when_text = at.astimezone(s.tz).strftime("%a %b %d, %H:%M %Z")
+        out.append(f"<div class='sd-item'><em>Scheduled</em><b>{e(names_text)}</b><small>{e(when_text)}</small></div>")
+    if not dated:
+        out.append("<p class='muted'>No upcoming time schedules.</p>")
+    out.append(f"</section><section class='card'><h2>{design.icon('chain')} Quick Links</h2>"
+               "<a class='sd-item' href='/strategies/archive'>Recycle bin &amp; version history &nbsp; →</a>"
+               "<a class='sd-item' href='/strategies/backtests'>VectorBT PRO backtest history &nbsp; →</a></section></aside>")
     out.append("<div class='under' data-panel='scheduled'>"
                "<label><input type='checkbox' name='auto' id='auto'"
                + (" checked" if auto["names"] else "") + "> Run selected strategies after each new scan</label>"
@@ -1501,7 +1513,7 @@ def render_strategies(app: App) -> str:
     cur, queued = st.current, list(st.queued)
     status = (f"Running {_pretty_name(cur['name'])}" + (f" · {len(queued)} queued" if queued else "")
               if cur else (f"{len(queued)} queued" if queued else "Idle · no strategies queued"))
-    out.append(f"<div class='card act' id='activity' data-panel='history'><div class='shead'><span class='v'>Run activity</span>"
+    out.append(f"<div class='card act' id='activity' data-panel='scheduled'><div class='shead'><span class='v'>Run activity</span>"
                f"<span class='muted' style='font-size:13px'>{e(status)}</span></div>" + _flash_html(app, "results"))
     if cur or queued:
         out.append("<h3>Now</h3>")
@@ -1520,7 +1532,7 @@ def render_strategies(app: App) -> str:
                "<section class='card' data-panel='scheduled'><h2>Time schedules</h2>"
                f"<p>{len(upcoming)} active · {len(missed)} missed · {e(s.tz_name)}</p>"
                "<div class='studio-actions'><button type='button' id='schedule-toggle' aria-expanded='false'>Create schedule</button>"
-               "<a href='/strategies?tab=library' data-workspace-tab='library'>Select strategies</a></div>"
+               "<a href='/strategies?tab=library' data-workspace-tab='configure'>Select strategies</a></div>"
                "<label class='studio-search'>Find a schedule<input id='schedule-search' type='search'></label>")
     if not (upcoming or missed):
         out.append("<p class='muted'>No time schedules.</p>")
@@ -1632,7 +1644,7 @@ def render_strategies(app: App) -> str:
 _STRAT_JS = r"""
 var f=document.getElementById('go');if(!f)return;var dirty=false;
 var boxes=[].slice.call(f.querySelectorAll("input[name='s']")),all=document.getElementById('all');
-var when=document.getElementById('when'),dl=document.getElementById('dl'),tl=document.getElementById('tl'),
+var when=f.elements.when,dl=document.getElementById('dl'),tl=document.getElementById('tl'),
 tz=document.getElementById('tz'),date=document.getElementById('date'),time=document.getElementById('time'),
 btn=document.getElementById('gobtn'),sum=document.getElementById('sum'),cnt=document.getElementById('cnt'),
 tlist=document.getElementById('tlist'),addt=document.getElementById('addtime');
@@ -1647,19 +1659,21 @@ return (n?n.value:'')+(lo?' · '+lo.value.replace('GMT','UTC').replace('-','−'
 function upd(){var c=boxes.filter(function(b){return b.checked}).length;
 boxes.forEach(function(b){b.closest('.srow').classList.toggle('on',b.checked)});
 if(cnt)cnt.textContent=c+' of '+boxes.length+' selected';
-if(all){all.checked=c===boxes.length&&c>0;all.indeterminate=c>0&&c<boxes.length;}
+[all,document.getElementById('row-all')].forEach(function(box){
+if(box){box.checked=c===boxes.length&&c>0;box.indeterminate=c>0&&c<boxes.length;}});
 if(!when)return;var w=when.value;dl.style.display=w==='once'?'':'none';tl.style.display=w==='now'?'none':'';
 tz.style.display=w==='now'?'none':'';tz.textContent=tzLabel();
 var n=slots().length,ts=times();if(addt)addt.hidden=w==='now'||n>=12;
 slots().forEach(function(s){s.querySelector('.tdel').hidden=n<2;});
-btn.textContent=w==='now'?'Run strategies':(ts.length>1?'Schedule '+ts.length+' runs':'Schedule strategies');
+btn.textContent=(w==='now'?'▶  Run ':'Schedule ')+c+' Selected '+(c===1?'Strategy':'Strategies');
 btn.disabled=c===0||(w!=='now'&&!ts.length);
 var who=c+' selected strateg'+(c===1?'y':'ies'),at=ts.join(', ')+' '+tz.textContent.split(' ·')[0];
 sum.textContent=w==='now'?who+' · runs now':!ts.length?who+' · pick a time':w==='once'?who+' · '+date.value+' at '+at
 :who+' · every weekday at '+at;}
 boxes.forEach(function(b){b.addEventListener('change',function(){dirty=true;upd()})});
-if(all)all.addEventListener('change',function(){boxes.forEach(function(b){b.checked=all.checked});dirty=true;upd()});
-[when,date].forEach(function(x){if(x)x.addEventListener('input',function(){dirty=true;upd()})});
+[all,document.getElementById('row-all')].forEach(function(box){
+if(box)box.addEventListener('change',function(){boxes.forEach(function(b){b.checked=box.checked});dirty=true;upd()});});
+[].slice.call(f.querySelectorAll('[name=when]')).concat(date).forEach(function(x){if(x)x.addEventListener('input',function(){dirty=true;upd()})});
 if(tlist){tlist.addEventListener('input',function(){dirty=true;upd()});
 tlist.addEventListener('click',function(ev){var b=ev.target.closest('.tdel');if(!b||slots().length<2)return;
 b.closest('.tslot').remove();if(!document.getElementById('time')){tlist.querySelector('input').id='time';}
@@ -1856,8 +1870,10 @@ def _candles_picker(spec: str, supported: List[str]) -> str:
 def _candles_hint(supported: List[str]) -> str:
     who = ", ".join(_pretty_name(x) for x in supported) or "none of your strategies yet"
     return ("<div class='chint'>Candles: 1 day = daily; 5 days = each candle covers 5 trading days; minutes = "
-            "intraday candles from 9:30 to 4:00 ET (FinViz keeps about 3 weeks of 1–15-minute bars and 9 months of "
-            f"30-minute ones). Used by: {html.escape(who)}. Other strategies run on daily candles.</div>")
+            "intraday candles from 9:30 to 4:00 ET. "
+            "<details class='sd-help'><summary aria-label='Candle history and strategy support'>ⓘ</summary>"
+            "FinViz keeps about 3 weeks of 1–15-minute bars and 9 months of 30-minute ones. "
+            f"Used by: {html.escape(who)}. Other strategies run on daily candles.</details></div>")
 
 
 def add_high_percent(rows: List[Dict[str, str]], result_dir: Path, asof: str) -> List[Dict[str, str]]:
@@ -2284,7 +2300,7 @@ def render_archive(app: App) -> str:
     out = ["<!doctype html><html lang='en'><head><meta charset='utf-8'>",
            "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Strategy recovery · Signal desk</title>",
            _THEME_INIT + f"<style>{_CSS}{_STRAT_CSS}{_JOURNAL_DESIGN_CSS}{_DASHBOARD_THEME_CSS}{_STRATEGIES_THEME_CSS}</style></head><body class='journal-app dashboard-app strategies-app'><main>", render_tabs("strategies"),
-           studio.subnav("settings"), "<h1>Recycle bin &amp; version history</h1>",
+           studio.subnav("versions"), "<div id='version-records'><h1>Recycle bin &amp; version history</h1>",
            "<p class='muted'>Restore requires a fresh email OTP. All past scan results stay available.</p>"]
     out.append(_flash_html(app, "archive"))
     for bucket, title, description in (
@@ -2310,7 +2326,7 @@ def render_archive(app: App) -> str:
                            "<button type='submit'>Restore</button></form></td></tr>")
             out.append("</tbody></table></div>")
         out.append("</div>")
-    out.append("</main></body></html>")
+    out.append("</div></main></body></html>")
     return "\n".join(out)
 
 

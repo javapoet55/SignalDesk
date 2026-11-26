@@ -20,7 +20,7 @@ class PortalWorkspaceTests(unittest.TestCase):
         strategies = host.app.strategies
         strategies.sandbox_error = ""
         fixture = {}
-        for name in ("trend_scan", "momentum_scan"):
+        for name in ("crsi_cross55","crsi_scanner","daily_scanner","fmfi_scanner","macdgen_v5","nqqe_banker","nqqe_scanner","swing_scanner"):
             filename = name + ".py"
             (strategies.scripts_dir / filename).write_text("# Offline navigation fixture\n")
             fixture[name] = {"file": filename, "kind": "script"}
@@ -37,36 +37,48 @@ class PortalWorkspaceTests(unittest.TestCase):
             page.locator("form.login-form button[type=submit]").click()
             page.goto(base + "/strategies")
             tabs = page.locator("nav[aria-label='Strategy workspace']")
-            page.locator(".srow input").first.uncheck()
-            tabs.get_by_text("Run Configuration").click()
+            page.locator("#row-all").uncheck()
+            page.locator(".srow input").first.check()
+            self.assertTrue(page.locator(".top2").is_visible())
+            self.assertTrue(page.locator(".sd-right").is_visible())
+            self.assertEqual(page.locator(".sd-metric").count(), 4)
+            page.get_by_role("radio", name="Custom time").check()
+            self.assertEqual(page.evaluate("new FormData(document.querySelector('#go')).get('when')"), "once")
+            page.get_by_role("radio", name="Run now").check()
+            tabs.get_by_text("Configure & Run").click()
             page.locator(".run-filters input").first.fill("17")
-            tabs.get_by_text("VectorBT PRO").click()
+            tabs.get_by_text("Backtest History").click()
             page.get_by_text("VectorBT PRO is unavailable.", exact=False).wait_for()
             page.go_back()
             self.assertEqual(page.locator(".run-filters input").first.input_value(), "17")
             self.assertEqual(page.locator(".srow input:checked").count(), 1)
-            for width in (1440, 1024, 390):
-                page.set_viewport_size({"width": width, "height": 900})
-                for key in ("library", "configure", "scheduled", "history", "backtests", "settings"):
+            page.get_by_role("radio", name="Schedule (recurring)").check()
+            page.locator("#time").fill("13:00")
+            page.locator("#gobtn").click()
+            page.wait_for_url("**/strategies#activity")
+            self.assertEqual(len(host.app.schedules.jobs("strategies")), 1)
+            tabs.get_by_text("Configure & Run").click()
+            page.get_by_role("radio", name="Run now").check()
+            for width in (1536, 1024, 390):
+                page.set_viewport_size({"width": width, "height": 1024})
+                for key in ("configure", "scheduled", "history", "backtests", "versions", "settings"):
                     tab = tabs.locator(f"[data-workspace-tab={key}]")
                     tab.click()
                     self.assertEqual(tab.get_attribute("aria-current"), "page")
-                    self.assertTrue(page.locator("#studio-title").is_visible())
+                    self.assertTrue(page.locator(".sd-hero h1").is_visible())
                     self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width + 1, key)
                     folder = os.getenv("STUDIO_SCREENSHOTS")
                     if folder:
                         page.screenshot(path=str(Path(folder) / f"{width}-{key}.png"))
             page.goto(base + "/strategies?tab=scheduled")
             page.get_by_role("button", name="Create schedule").click()
-            self.assertEqual(page.locator("#when").input_value(), "weekdays")
+            self.assertEqual(page.locator("[name=when]:checked").input_value(), "weekdays")
             page.keyboard.press("Escape")
-            page.get_by_role("button", name="☰ Menu").click()
-            self.assertTrue(page.locator(".studio-rail").is_visible())
-            page.keyboard.press("Escape")
+            self.assertTrue(page.locator(".sd-header nav").is_visible())
             page.get_by_role("button", name="Day").click()
             self.assertEqual(page.locator("html").get_attribute("data-theme"), "light")
             for route in ("/", "/paper", "/journal", "/notes", "/notebook", "/tradingview", "/strategies/archive"):
                 self.assertEqual(page.goto(base + route).status, 200)
-                self.assertEqual(page.locator("#studio-rail").count(), 1)
+                self.assertEqual(page.locator(".sd-header" if route.startswith("/strategies") else "#studio-rail").count(), 1)
             self.assertFalse(errors, errors)
             browser.close()

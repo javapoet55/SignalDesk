@@ -195,9 +195,9 @@ class TestSchedulesWeb(unittest.TestCase):
 
     def test_1_page_layout(self):
         page = self.page()
-        for text in ("Ticker source", "Price basis", "New scan at run time", "Your strategies", "Select all",
-                     "2 of 2 selected", "Run schedule", "Schedule for later", "Every weekday", "Run activity",
-                     "Run selected strategies after each new scan", "Upload strategy", "Data &amp; configuration",
+        for text in ("Ticker source", "Price basis", "New scan at run time", "Select Strategies", "Select All",
+                     "2 of 2 selected", "Run Schedule", "Custom time (one-time)", "Schedule (recurring)", "Run activity",
+                     "Run selected strategies after each new scan", "Upload Strategy", "Data &amp; configuration",
                      "Macdgen V5 regime backtest", "macdgen_v5_regime_backtest.py", "V5-style", "Custom",
                      "Scan schedule: None scheduled"):
             self.assertIn(text, page, text)
