@@ -2103,13 +2103,14 @@ def render_result(app: App, rid: str) -> Optional[str]:
     if (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN") and
             status == "ok" and meta.get("mode") == "close" and meta.get("candles", "1d") == "1d"):
         buy_count = len(signal_tickers(d))
+        date_limit = f" max='{e(meta['asof'])}'" if meta.get("asof") else ""
         batch_button = (f" <button name='scope' value='all' formnovalidate>Backtest all {buy_count} buy signals</button>" if buy_count else "")
         out.append(f"<section class='runcard'><h2>VectorBT PRO backtest</h2><form method='post' action='/strategies/backtest'>"
                    f"<input type='hidden' name='rid' value='{e(rid)}'><label>Symbol <input name='symbol' required maxlength='15'></label> "
                    + ("<label>Signals <select name='source'><option value='archive'>Saved signals</option>"
                       "<option value='replay'>Replay current Python strategy on this symbol</option><option value='range'>Historical date range</option></select></label> "
                       "<label>Replay sessions <input type='number' name='sessions' min='4' max='252' value='60'></label> "
-                      "<label>Historical start <input type='date' name='historical_start'></label> <label>Historical end <input type='date' name='historical_end'></label> "
+                      f"<label>Historical start <input type='date' name='historical_start'{date_limit}></label> <label>Historical end <input type='date' name='historical_end'{date_limit}></label> "
                       if kind == "generic" else "") +
                    "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
                    "<label>Profit target (%) <input type='number' name='profit_target_pct' min='0' step='any' placeholder='Optional'></label> "
@@ -3006,7 +3007,7 @@ class Handler(BaseHTTPRequestHandler):
                 key = vb_workspace.submit(self.app.strategies, fields, signal_tickers)
                 return self._redirect("/vectorbt?job=" + key)
             except (ValueError, OSError) as err:
-                return vb_workspace.page(self, {}, fields, str(err))
+                return vb_workspace.page(self, {}, fields, err)
         if path == "/strategies/copilot":
             form = {k:v[0] for k,v in urllib.parse.parse_qs(raw.decode("utf-8",errors="replace"),keep_blank_values=True).items()}
             return self._research_copilot(form.get("job",""), form.get("hold",""), form=form)

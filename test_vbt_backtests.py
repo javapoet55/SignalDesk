@@ -135,6 +135,18 @@ class BatchSignals(unittest.TestCase):
 
 
 class CalendarReplayTests(unittest.TestCase):
+    def test_date_errors_report_cutoff_and_trading_session_count_in_either_order(self):
+        from backtests import calendar_replay
+
+        for a, b, message in (
+            ("2026-11-26", "2026-06-01", "data through 2026-11-25"),
+            ("2026-11-25", "2026-11-24", "contains 2 NYSE sessions"),
+            ("2026-11-25", "2025-01-03", "4–252 sessions"),
+        ):
+            for interval in ((a, b), (b, a)):
+                with self.subTest(interval=interval), self.assertRaisesRegex(ValueError, message):
+                    calendar_replay(None, {"asof": "2026-11-25"}, None, {}, "ABC", *interval)
+
     def test_selects_exact_calendar_month_and_preserves_prior_history(self):
         from unittest.mock import patch
         from backtests import calendar_replay

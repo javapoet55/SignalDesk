@@ -58,15 +58,15 @@ class RangeSubmission(unittest.TestCase):
                 patch("strategies._chown_nobody"),
                 patch("backtests.service", return_value={"id": "job"}) as service,
             ):
-                for selection, expected in [
-                    ("ANF,TGLS", symbols[:2]),
-                    ("ALL", symbols),
+                for selection, expected, start, end in [
+                    ("ANF,TGLS", symbols[:2], days[-1], days[0]),
+                    ("ALL", symbols, days[0], days[-1]),
                 ]:
                     self.assertEqual(
                         submit(
                             manager,
                             dict(
-                                rid=rid, symbols=selection, start=days[0], end=days[-1], profit_target_pct="2"
+                                rid=rid, symbols=selection, start=start, end=end, profit_target_pct="2"
                             ),
                             lambda _: symbols,
                         ),
@@ -89,12 +89,14 @@ class RangeSubmission(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(
                     ValueError, "CCCC lacks a daily open or close on " + days[2]
-                ):
+                ) as problem:
                     submit(
                         manager,
                         dict(rid=rid, symbols="ALL", start=days[0], end=days[-1]),
                         lambda _: symbols,
                     )
+                self.assertEqual(problem.exception.covered_symbols, ["ANF", "TGLS", "CELC"])
+                self.assertEqual(problem.exception.common_range, (days[3], days[-1]))
 
 
 class PortfolioCalculation(unittest.TestCase):

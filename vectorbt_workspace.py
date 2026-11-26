@@ -468,6 +468,10 @@ def controls(runs, rid, info, symbols, enabled, fields):
     start, end = fields.get("start", ""), fields.get("end", "")
     if not fields and info.get("source") == "Historical date-range replay":
         start, end = info.get("_start", ""), info.get("_end", "")
+    if start and end:
+        start, end = sorted((start, end))
+    cutoff = next((r.get("asof") for r in runs if r["id"] == rid), None)
+    date_limit = f" max='{esc(cutoff)}'" if cutoff else ""
     holds = fields.get("holds")
     if holds is None:
         holds = str(info["_hold"]) if "_hold" in info else ",".join(map(str, info.get("holds", [1])))
@@ -492,18 +496,40 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"
-        "<div><label>Historical start<input name='start' type='date' value='"
+        f"<div><label>Historical start<input name='start' type='date'{date_limit} value='"
         + esc(start)
         + "'></label>"
-        "<label>Historical end<input name='end' type='date' value='"
+        f"<label>Historical end<input name='end' type='date'{date_limit} value='"
         + esc(end)
         + "'></label>"
-        "<small>Choose both dates to recalculate daily signals for the selected tickers. Leave dates blank to use saved signals.</small>"
+        "<small>Choose 4–252 trading sessions. You can enter the dates in either order. "
+        + (f"This run has data through {esc(cutoff)}. " if cutoff else "")
+        + "Leave both blank to use saved signals.</small>"
         "</div></details>"
         "<button class='vb-run' type='submit'"
         + ("" if runs and enabled else " disabled")
         + ">▶　Run Backtest</button></form>"
     )
+
+
+def coverage_options(error, fields):
+    options = []
+    if error.common_range:
+        start, end = error.common_range
+        options.append((f"Run {error.symbol_count} selected symbol{'s' if error.symbol_count != 1 else ''} · {start} – {end}",
+                        dict(fields, start=start, end=end)))
+    if error.covered_symbols:
+        start, end = error.requested_range
+        count = len(error.covered_symbols)
+        options.append((f"Run {count} fully covered symbol{'s' if count != 1 else ''} · {start} – {end}",
+                        dict(fields, symbols=",".join(error.covered_symbols))))
+    forms = []
+    for label, values in options:
+        inputs = "".join(f"<input type='hidden' name='{name}' value='{esc(values.get(name, ''))}'>"
+                         for name in ("rid", "symbols", "start", "end", "holds", "profit_target_pct", "commission")
+                         if name in values)
+        forms.append(f"<form method='post' action='/vectorbt/run'>{inputs}<button type='submit'>{esc(label)}</button></form>")
+    return "<div class='vb-recovery'>" + "".join(forms) + "</div>" if forms else ""
 
 
 def page(host, query, fields=None, error=""):
@@ -588,6 +614,7 @@ def page(host, query, fields=None, error=""):
         f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>VectorBT PRO Backtesting</h1>"
         "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
+        + (coverage_options(error, fields) if fields and isinstance(error, backtests.ReplayCoverageError) else "")
         + form
         + report(job, key, m, query.get("window", "All"))
         + "<details class='vb-card vb-history' id='saved-backtests'><summary>Saved backtest history</summary>"
@@ -607,12 +634,22 @@ def page(host, query, fields=None, error=""):
 
 SCRIPT = """
 const form=document.querySelector('.vb-controls');
+form.addEventListener('input',()=>document.querySelector('.vb-recovery')?.remove(),{once:true});
 const dates=form.querySelector('.vb-dates'), caption=dates.querySelector('summary span');
-function rangeText(){
-  const {start,end}=form.elements;
-  caption.textContent=(start.value||end.value)?(start.value||'Start')+' – '+(end.value||'End')+' ▾':'Saved signal dates ▾';
+const {start,end}=form.elements;
+function updateRange(commit=false){
+  let first=start.value, last=end.value;
+  if(first && last && first>last){
+    [first,last]=[last,first];
+    if(commit){start.value=first;end.value=last}
+  }
+  start.required=Boolean(last);
+  end.required=Boolean(first);
+  caption.textContent=(first||last)?(first||'Start')+' – '+(last||'End')+' ▾':'Saved signal dates ▾';
 }
-dates.oninput=rangeText;
+updateRange();
+dates.oninput=()=>updateRange();
+dates.addEventListener('toggle',()=>{if(!dates.open)updateRange(true)});
 const picker=form.querySelector('.vb-picker'), input=form.elements.symbols, chips=document.querySelector('#vb-chips');
 const boxes=[...picker.querySelectorAll('input[type=checkbox]')];
 function refreshSymbols(){
@@ -640,7 +677,7 @@ for(const pop of [picker,dates]){
 }
 document.querySelector('#vb-saved')?.addEventListener('click',()=>document.querySelector('#saved-backtests').open=true);
 form.addEventListener('invalid',e=>{if(dates.contains(e.target))dates.open=true;if(picker.contains(e.target))picker.open=true},true);
-form.onsubmit=()=>{form.querySelector('button').disabled=true;form.querySelector('button').textContent='Submitting…'};
+form.onsubmit=()=>{updateRange(true);form.querySelector('button').disabled=true;form.querySelector('button').textContent='Submitting…'};
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
 """
 
@@ -648,6 +685,7 @@ window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
 CSS = """
 .vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--dow:#c88720;--edge:var(--sd-line)}
 .vb-content{min-width:0}
+.vb-recovery{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.vb-recovery form{margin:0}
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
 .vb-controls{display:grid;grid-template-columns:1.35fr 1.65fr .78fr .9fr .8fr 1.45fr auto;align-items:end;gap:16px;margin-bottom:16px}

@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import math
 import hashlib
+from itertools import groupby
 import tempfile
 import threading
 import time
@@ -102,21 +103,47 @@ def replay(st, meta, cache, symbol, sessions):
         _REPLAY_SLOT.release()
 
 
+class ReplayCoverageError(ValueError):
+    def __init__(self, missing, symbols, sessions):
+        self.covered_symbols = [s for s in symbols if s not in missing]
+        missing_days = set().union(*missing.values())
+        complete_spans = (
+            list(days) for available, days in groupby(sessions, lambda day: day not in missing_days)
+            if available
+        )
+        longest = max(complete_spans, key=len, default=[])
+        self.common_range = (longest[0], longest[-1]) if len(longest) >= 4 else None
+        self.requested_range = (sessions[0], sessions[-1])
+        self.symbol_count = len(symbols)
+        ticker = next(iter(missing))
+        message = f"{ticker} lacks a daily open or close on {min(missing[ticker])}."
+        if len(missing) > 1:
+            message += f" {len(missing)} symbols have incomplete prices in this range."
+        if self.common_range:
+            message += f" All selected symbols have complete prices from {longest[0]} through {longest[-1]}."
+        elif not self.covered_symbols:
+            message += " Choose another range or symbol selection with at least four fully priced sessions."
+        super().__init__(message)
+
+
 def calendar_replay(manager, meta, cache, history, symbol, start, end, *, tickers=None):
     from paper_trading.market import exchange
     from finviz_prices import parse_quote_csv
 
     try:
-        first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+        first, last = sorted((dt.date.fromisoformat(start), dt.date.fromisoformat(end)))
     except ValueError:
         raise ValueError("Choose both a historical start date and end date.") from None
-    if first > last or last.isoformat() > meta["asof"] or (last - first).days > 370:
+    if last.isoformat() > meta["asof"]:
+        raise ValueError(f"This run has data through {meta['asof']}. Choose an end date on or before that date.")
+    calendar = exchange()
+    if first < calendar.first_session.date() or last > calendar.last_session.date():
         raise ValueError(
-            "Choose an ordered historical interval within the run’s as-of date, up to 252 sessions."
+            f"Choose dates within the available NYSE calendar ({calendar.first_session.date()} – {calendar.last_session.date()})."
         )
-    expected = [d.date().isoformat() for d in exchange().sessions_in_range(first, last)]
+    expected = [d.date().isoformat() for d in calendar.sessions_in_range(first, last)]
     if not 4 <= len(expected) <= 252:
-        raise ValueError("Select an interval containing 4–252 NYSE sessions.")
+        raise ValueError(f"{first} – {last} contains {len(expected)} NYSE sessions. Choose a range with 4–252 sessions.")
     symbols = [symbol] if isinstance(symbol, str) else symbol
     available = {ticker for prices in history.values() for ticker in prices}
     keys = {}
@@ -136,6 +163,7 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
         raise ValueError("Each ticker in a basket must identify a different security.")
     # Preserve the original snapshot wherever possible. Prepend matching Finviz history for indicator warm-up.
     hist = {d: dict(prices) for d, prices in history.items() if d <= expected[-1]}
+    first_day = first.isoformat()
     if manager.finviz and meta.get("price_source", "finviz") == "finviz":
         for sym in dict.fromkeys([*keys.values(), "SPY"]):
             path = manager.finviz.cache_dir / (sym + ".csv")
@@ -155,10 +183,11 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
                 raise ValueError(
                     "Finviz price histories have different adjustment bases; choose a consistent snapshot."
                 )
-            prior = [d for d in sorted(archive) if d < earliest and d < start][-1000:]
+            prior = [d for d in sorted(archive) if d < earliest and d < first_day][-1000:]
             window = [d for d in expected if d < earliest and d in archive]
             for d in prior + window:
                 hist.setdefault(d, {})[sym] = archive[d]
+    missing = {}
     for ticker, key in keys.items():
         for day in expected:
             bar = hist.get(day, {}).get(key, {})
@@ -168,9 +197,9 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
                 or bar[k] <= 0
                 for k in ("o", "c")
             ):
-                raise ValueError(
-                    f"{ticker} lacks a daily open or close on {day}. Choose a shorter range or remove this ticker."
-                )
+                missing.setdefault(ticker, set()).add(day)
+    if missing:
+        raise ReplayCoverageError(missing, symbols, expected)
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp)
         folder.chmod(0o755)
