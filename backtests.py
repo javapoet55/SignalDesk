@@ -74,6 +74,30 @@ def daily_high(bar):
     return None
 
 
+def replay_failure(log, mem_mb):
+    """Say why a replay stopped, from the last line the strategy process wrote.
+
+    The log lives in a temporary folder that is deleted with the replay, so this message is the
+    only place the reason survives."""
+    generic = "Historical Python replay failed or timed out. Try fewer sessions or archived signals."
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(max(0, os.path.getsize(log) - 4000))
+            lines = [line.strip() for line in handle.read().decode("utf-8", errors="replace").splitlines()]
+    except OSError:
+        return generic
+    last = next((line for line in reversed(lines) if line), "")
+    if not last:
+        return generic
+    if last.startswith("MemoryError"):
+        return (f"Historical Python replay ran out of memory (limit {mem_mb} MB). "
+                "Choose a shorter date range or fewer symbols.")
+    kind, _, detail = last.partition(": ")
+    # replay_daily raises ValueError with a complete sentence, e.g. which symbol and date failed.
+    reason = detail if kind == "ValueError" and detail else last
+    return "Historical Python replay stopped. " + reason[:300].rstrip(".") + "."
+
+
 def replay(st, meta, cache, symbol, sessions):
     strategy = st.meta().get(meta["strategy"], {})
     if strategy.get("kind") != "generic" or not 4 <= sessions <= 252:
@@ -121,9 +145,16 @@ def replay(st, meta, cache, symbol, sessions):
             timeout = replay_timeout(st)
             code, _ = sm.run_sandboxed(args, work, log, timeout, timeout, st.mem_mb)
             symbol_count = 1 if isinstance(symbol, str) else len(symbol)
-            if code or output.stat().st_size > 20000 * symbol_count:
+            if code == -1:
                 raise ValueError(
-                    "Historical Python replay failed or timed out. Try fewer sessions or archived signals."
+                    f"Historical Python replay ran longer than {timeout} seconds and was stopped. "
+                    "Choose a shorter date range or fewer symbols."
+                )
+            if code:
+                raise ValueError(replay_failure(log, st.mem_mb))
+            if output.stat().st_size > 20000 * symbol_count:
+                raise ValueError(
+                    "Historical Python replay returned more signal data than expected. Choose fewer sessions."
                 )
             result = json.loads(output.read_text())
             buys = result["buys"]
