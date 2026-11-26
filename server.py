@@ -58,6 +58,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:  # find finviz_agent.py next to this file even under `python -I`
     sys.path.insert(0, str(_HERE))
 import backtests
+import research_copilot as copilot
 import finviz_agent as fa  # noqa: E402  same folder; its rules validate presets added on the page
 import strategies as sm  # noqa: E402  Strategies tab (uploaded .py strategies + price data)
 try:  # TradingView watchlist sync (optional: everything else works without it)
@@ -2817,6 +2818,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(200, "<!doctype html><meta charset='utf-8'><title>Backtest history</title>"
                                   "<main><a href='/strategies'>Strategies</a><h1>VectorBT PRO backtests</h1>"
                                   "<p>Open a completed daily strategy result to start a backtest.</p><ul>"+links+"</ul></main>")
+            research = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})/copilot", path)
+            if research and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+                query = urllib.parse.parse_qs(parts.query)
+                return self._research_copilot(research[1], query.get("hold", [""])[0],
+                                              download=query.get("download") == ["1"])
             match = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})", path)
             if match and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
                 try:
@@ -2885,7 +2891,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(303, b"", "text/plain; charset=utf-8",
                               {"Location": "/login?signed_out=1", "Set-Cookie": self._session_cookie("logged-out")})
         upload_routes = ("/strategies/upload", "/strategies/mcap", "/journal/import")
-        form_routes = ("/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
+        form_routes = ("/strategies/copilot", "/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
                        "/presets/topn",
                        "/strategies/delete",
                        "/strategies/backtest", "/strategies/results/delete", "/strategies/tvlink", "/strategies/cancel", "/strategies/note", "/strategies/run",
@@ -2914,7 +2920,38 @@ class Handler(BaseHTTPRequestHandler):
             return self._begin_change(path, raw, label)
         return self._apply_post(path, raw)
 
+    def _research_copilot(self, key, choice, form=None, download=False):
+        if not re.fullmatch(r"[0-9a-f-]{36}", key) or not os.environ.get("VBT_SERVICE_URL") or not os.environ.get("VBT_SERVICE_TOKEN"):
+            return self._text(404, "Unknown backtest.")
+        try:
+            job = backtests.service("/jobs/" + key)
+            hold, facts = copilot.evidence(job, choice)
+        except ValueError as err:
+            return self._text(400, str(err))
+        root = self.app.settings.data_dir
+        message = ""
+        status = 200
+        if form is not None:
+            mode, question = form.get("mode", ""), form.get("question", "").strip()
+            if mode not in copilot.MODES or len(question) > 1200:
+                return self._text(400, "Choose a research task and a question up to 1200 characters.")
+            try:
+                model, answer = copilot.ask(facts, mode, question)
+            except ValueError as err:
+                message, status = str(err), 503
+            else:
+                copilot.history(root, key, hold, (mode,question,model,answer))
+                return self._redirect(f"/strategies/backtests/{key}/copilot?hold={hold}")
+        reports = copilot.history(root, key, hold)
+        if download:
+            return self._send(200, copilot.report_text(facts,reports).encode(), "text/plain; charset=utf-8",
+                              {"Content-Disposition": f'attachment; filename="research-{key}-{hold}.txt"'})
+        return self._html(status,copilot.render(key,hold,facts,reports,message))
+
     def _apply_post(self, path: str, raw: bytes, content_type: Optional[str] = None) -> None:
+        if path == "/strategies/copilot":
+            form = {k:v[0] for k,v in urllib.parse.parse_qs(raw.decode("utf-8",errors="replace"),keep_blank_values=True).items()}
+            return self._research_copilot(form.get("job",""), form.get("hold",""), form=form)
         if path == "/notebook/save":
             form = {k:v[0] for k,v in urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True).items()}
             try:

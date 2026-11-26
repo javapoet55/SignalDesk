@@ -301,6 +301,7 @@ def result_html(job, refresh_path, hold_choice=""):
     out.append(
         f"<div class='meta'>{e(start)} — {e(end)}<br><small>Daily · VectorBT PRO {e(result['engine'])}</small></div></header>{context}"
     )
+    out.append(f"<p><a href='{e(refresh_path)}/copilot?hold={hold}'>Open AI Research Copilot →</a></p>")
     peak = CAPITAL
     dd = []
     daily = []
