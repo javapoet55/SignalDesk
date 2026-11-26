@@ -343,7 +343,7 @@ async function draw() {
           "</p>" +
           signalForm(),
       ) +
-      '</div><div id="preview"></div>';
+      "</div>";
   } else if (active === names[2]) {
     const rs = await resource("signals?" + params());
     const exits = await resource("exits");
@@ -557,7 +557,8 @@ async function draw() {
     );
   $("content").innerHTML = html;
   if ($("chart")) renderEquity();
-  if (active === names[1] && selected) await candles(gen);
+  if (active === names[1] && selected)
+    await Promise.all([ticketPrice(), candles(gen)]);
 }
 function tiles(rs, label, value, unit) {
   if (!rs.length) return '<p class="muted">Insufficient history.</p>';
@@ -842,7 +843,13 @@ function signalForm() {
           "<option " + (s === t.side ? "selected" : "") + ">" + s + "</option>",
       )
       .join("") +
-    '</select></label><fieldset class="sizing"><legend>Position sizing</legend><div>' +
+    '</select></label><label>Price basis<select name="pricing"><option value="close">Latest completed NYSE close</option><option value="live" ' +
+    (ticket && t.pricing !== "close" ? "selected" : "") +
+    ">Current regular-session price</option></select></label>" +
+    '<label><span id="price-label">' +
+    (t.side === "Sell" ? "Sell" : "Buy") +
+    ' price (USD)</span><output id="ticket-price" aria-live="polite">Select a symbol</output></label>' +
+    '<fieldset class="sizing"><legend>Position sizing</legend><div>' +
     Object.entries({
       shares: "Quantity",
       dollars: "Dollars",
@@ -920,8 +927,40 @@ function signalForm() {
     "<small>Confirming the buy also authorizes a simulated sale of its shares. A stop activates at or below the stop price and fills only at or above the limit.</small></fieldset>" +
     input("Strategy Name", "research", "text", t.research || research) +
     input("Signal notes", "notes", "text", t.notes || "") +
-    '<button class="primary">Preview signal</button><button type="submit" value="draft">Save draft</button></form>'
+    '<button class="primary">Preview signal</button><button type="submit" value="draft">Save draft</button><div id="preview"><button type="button" disabled>Execute paper trade</button><small> Preview the signal to enable execution.</small></div></form>'
   );
+}
+function clearPreview() {
+  const area = $("preview");
+  if (area)
+    area.innerHTML =
+      '<button type="button" disabled>Execute paper trade</button><small> Preview the signal to enable execution.</small>';
+}
+let priceTimer;
+async function ticketPrice() {
+  const out = $("ticket-price"),
+    f = $("signal");
+  if (!out || !f) return;
+  const ticker = f.elements.symbol.value.trim().toUpperCase(),
+    pricing = f.elements.pricing.value;
+  const isCurrent = () =>
+    out === $("ticket-price") &&
+    f.elements.symbol.value.trim().toUpperCase() === ticker &&
+    f.elements.pricing.value === pricing;
+  out.textContent = ticker ? "Loading price…" : "Select a symbol";
+  if (!ticker) return;
+  try {
+    const q = await api(
+      "reference?symbol=" + encodeURIComponent(ticker) + "&pricing=" + pricing,
+    );
+    if (isCurrent())
+      out.textContent =
+        cash(q.price) +
+        " · " +
+        (q.session ? q.session + " NYSE close" : date(q.stamp));
+  } catch (err) {
+    if (isCurrent()) out.textContent = err.message;
+  }
 }
 function review(r) {
   const t = JSON.parse(r.ticket),
@@ -965,8 +1004,8 @@ function review(r) {
         : "") +
       button(
         p.exit
-          ? "Confirm buy and authorize conditional sale"
-          : "Confirm simulated transaction",
+          ? "Execute paper trade and authorize conditional sale"
+          : "Execute paper trade",
         "confirm",
         r.id,
       ) +
@@ -1260,10 +1299,20 @@ document.addEventListener("input", (e) => {
           (b.hidden = !b.textContent.includes(e.target.value.toUpperCase())),
       );
   if (["from", "through"].includes(e.target.name)) renderEquity();
-  if (e.target.closest("#signal") && $("preview")) $("preview").innerHTML = "";
+  if (e.target.closest("#signal")) {
+    clearPreview();
+    if (e.target.name === "symbol") {
+      clearTimeout(priceTimer);
+      $("ticket-price").textContent = "Loading price…";
+      priceTimer = setTimeout(ticketPrice, 300);
+    }
+  }
 });
 document.addEventListener("change", (e) => {
   const f = e.target.closest("#signal");
+  if (f && ["pricing", "symbol"].includes(e.target.name)) ticketPrice();
+  if (f && e.target.name === "side")
+    $("price-label").textContent = f.side.value + " price (USD)";
   if (f && ["side", "unit"].includes(e.target.name)) {
     $("sell-conditions").hidden = $("sell-conditions").disabled =
       f.side.value === "Sell";
@@ -1310,7 +1359,7 @@ document.addEventListener("click", async (e) => {
     if (a === "percent") {
       const f = $("signal");
       f.amount.value = id;
-      $("preview").innerHTML = "";
+      clearPreview();
     }
     if (a === "confirm" || a === "cancel") {
       const r = await resource("signals/" + id + "/" + a, {});
@@ -1434,11 +1483,22 @@ document.addEventListener("submit", async (e) => {
         msg("Draft saved.");
         return;
       }
+      const submitted = JSON.stringify([...new FormData(f)]);
       const r = await resource("preview", {
         ...data,
         replaces: ticket?.replaces,
         request_key: f.dataset.key,
       });
+      if (
+        f !== $("signal") ||
+        JSON.stringify([...new FormData(f)]) !== submitted
+      )
+        return;
+      if (r.status !== "Pending") {
+        delete f.dataset.signature;
+        clearPreview();
+        throw Error("This preview is " + r.status + ". Preview again.");
+      }
       $("preview").innerHTML = review(r);
       $("preview").scrollIntoView({ block: "nearest" });
     }

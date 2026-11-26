@@ -60,6 +60,42 @@ class Market:
             self.cache[ticker] = (time.monotonic() + 20, result)
             return result
 
+    def closing_quote(self, ticker, now):
+        ticker = symbol(ticker)
+        stamp = latest_close(now)
+        day = dt.datetime.fromtimestamp(stamp, fp.ET).date().isoformat()
+        key = (ticker, day)
+        with self.lock:
+            cached = self.cache.get(key)
+            if cached and time.monotonic() < cached[0]:
+                return cached[1]
+            if not self.source:
+                raise Problem("Finviz closing prices are unavailable.", 503)
+            try:
+                raw = self.source.client.quote_history(ticker, "d")
+                bars, _ = fp.parse_quote_csv(raw)
+            except (AgentError, fp.FinvizPriceError, ValueError, OSError):
+                raise Problem(
+                    "Could not retrieve the Finviz daily close.", 503
+                ) from None
+            if day not in bars:
+                raise Problem(
+                    f"Finviz has not supplied the {day} NYSE close for {ticker}.", 409
+                )
+            price = Decimal(str(bars[day]["c"]))
+            if not price.is_finite() or price <= 0:
+                raise Problem("Invalid closing price.", 503)
+            quote = {
+                "price": str(price),
+                "stamp": stamp,
+                "source": "Finviz daily close",
+                "session": day,
+            }
+            if len(self.cache) >= 128:
+                self.cache.pop(next(iter(self.cache)))
+            self.cache[key] = (time.monotonic() + 20, quote)
+            return quote
+
     def quote(self, ticker):
         bar = self.history(ticker)[-1]
         return {
@@ -94,3 +130,23 @@ def open_minute(stamp):
 
     minute = pd.Timestamp(stamp, unit="s", tz="UTC").floor("min")
     return exchange().is_open_on_minute(minute)
+
+
+def latest_close(now):
+    calendar = exchange()
+    day = dt.datetime.fromtimestamp(now, fp.ET).date().isoformat()
+    session = calendar.date_to_session(day, direction="previous")
+    close = calendar.session_close(session)
+    if close.timestamp() > now:
+        close = calendar.session_close(calendar.previous_session(session))
+    return int(close.timestamp())
+
+
+def validate_reference(quote, now, pricing):
+    if pricing == "close":
+        if quote["stamp"] != latest_close(now):
+            raise Problem(
+                "A newer NYSE session has closed. Preview the ticket again.", 409
+            )
+    else:
+        fresh(quote, now)

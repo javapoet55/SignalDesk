@@ -22,8 +22,16 @@ class BrowserTests(unittest.TestCase):
     def test_real_session_desktop_and_mobile(self):
         host = LiveServer()
         self.addCleanup(host.close)
-        stamp = int(dt.datetime(2026, 11, 24, 16, tzinfo=dt.UTC).timestamp())
+        from paper_trading.market import latest_close
+
+        stamp = int(dt.datetime(2026, 11, 25, 23, tzinfo=dt.UTC).timestamp())
         feed = Feed(stamp)
+        feed.closing_quote = lambda ticker, now: {
+            "price": "10",
+            "stamp": latest_close(now),
+            "source": "Finviz daily close",
+            "session": "2026-11-25",
+        }
         feed.history = lambda ticker: [
             {"o": 9, "h": 11, "l": 8, "c": 10, "v": 100, "stamp": stamp}
         ]
@@ -44,6 +52,12 @@ class BrowserTests(unittest.TestCase):
             page.get_by_role("button", name="New signal", exact=True).click()
             page.get_by_label("Strategy Name", exact=True).wait_for()
             page.get_by_label("Symbol", exact=True).fill("TEST")
+            page.get_by_text("$10.00 · 2026-11-25 NYSE close").wait_for()
+            self.assertTrue(
+                page.get_by_role(
+                    "button", name="Execute paper trade", exact=True
+                ).is_disabled()
+            )
             page.get_by_role("radio", name="Dollars").check()
             page.get_by_label("Dollar amount (USD)").fill("20")
             page.get_by_role("radio", name="Percent").check()
@@ -65,7 +79,7 @@ class BrowserTests(unittest.TestCase):
                 page.locator("#candles svg").wait_for()
                 page.screenshot(path=screenshot, full_page=True)
             page.get_by_role(
-                "button", name="Confirm buy and authorize conditional sale"
+                "button", name="Execute paper trade and authorize conditional sale"
             ).click()
             page.get_by_text("Simulated", exact=True).first.wait_for()
             page.locator("#tabs").get_by_role("button", name="Signal Manager").click()

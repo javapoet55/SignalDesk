@@ -140,6 +140,13 @@ def dispatch(h, path, query, owner):
             from .research import saved_result
 
             return send(saved_result(h.app, q.get("run", ""), q.get("symbol", "")))
+        if path == "/paper/api/reference" and not post:
+            from .market import validate_reference
+
+            pricing = q.get("pricing", "close")
+            quote = db.reference(symbol(q.get("symbol")), pricing)
+            validate_reference(quote, db.now(), pricing)
+            return send(quote)
         if path == "/paper/api/bars" and not post:
             cutoff = db.now() - entitlements(owner)["history_days"] * 86400
             return send(

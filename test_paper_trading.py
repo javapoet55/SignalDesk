@@ -458,3 +458,62 @@ class PaperTests(unittest.TestCase):
         self.assertEqual(
             self.db.valuation("alice", self.pid)["portfolio"]["cash"], "1002.00"
         )
+
+    def test_daily_close_calendar_and_missing_data(self):
+        from types import SimpleNamespace
+
+        from paper_trading.market import Market, latest_close
+
+        def epoch(day, hour):
+            return int(dt.datetime(2026, 11, day, hour, tzinfo=dt.UTC).timestamp())
+
+        # Thanksgiving, Black Friday before and after the early close, Saturday.
+        for day, hour, expected in [
+            (25, 23, epoch(25, 21)),
+            (26, 18, epoch(25, 21)),
+            (27, 17, epoch(25, 21)),
+            (27, 18, epoch(27, 18)),
+            (28, 14, epoch(27, 18)),
+        ]:
+            self.assertEqual(latest_close(epoch(day, hour)), expected)
+        csv = "Date,Open,High,Low,Close,Volume\n11/25/2026,350,360,349,355.58,100\n"
+        feed = Market(
+            SimpleNamespace(
+                client=SimpleNamespace(quote_history=lambda sym, period: csv)
+            )
+        )
+        self.assertEqual(feed.closing_quote("TEST", epoch(26, 17))["price"], "355.58")
+        with self.assertRaises(Problem):
+            feed.closing_quote("TEST", epoch(27, 20))
+
+    def test_after_hours_preview_fill_and_expiry(self):
+        from paper_trading.market import latest_close
+
+        self.now = int(dt.datetime(2026, 11, 25, 23, tzinfo=dt.UTC).timestamp())
+        self.feed.closing_quote = lambda sym, now: {
+            "price": "12.50",
+            "stamp": latest_close(now),
+            "source": "Finviz daily close",
+        }
+        ticket = {
+            "side": "Buy",
+            "symbol": "TEST",
+            "amount": "2",
+            "method": "shares",
+            "pricing": "close",
+            "request_key": "after-close-1",
+        }
+        r = self.db.preview("alice", self.pid, ticket)
+        self.db.expire_pending()
+        self.assertEqual(self.confirm(r)["status"], "Simulated")
+        self.assertEqual(self.confirm(r)["status"], "Simulated")
+        tx = self.db.records("alice", self.pid, "transactions")[0]
+        self.assertEqual(
+            (tx["price"], tx["stamp"], tx["created"]),
+            ("12.50", latest_close(self.now), self.now),
+        )
+        r = self.db.preview(
+            "alice", self.pid, {**ticket, "request_key": "after-close-2"}
+        )
+        self.now += 121
+        self.assertEqual(self.confirm(r)["status"], "Expired")

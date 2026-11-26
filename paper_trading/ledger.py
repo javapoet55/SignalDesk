@@ -10,7 +10,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_EVEN, InvalidOperation
 from decimal import Decimal as D
 from pathlib import Path
 
-from .market import Problem, fresh, symbol
+from .market import Problem, symbol, validate_reference
 from .policy import entitlements
 
 CENT = D(".01")
@@ -244,17 +244,24 @@ class Ledger:
             ).fetchone()[0]
         return p, positions, realized, pending
 
-    def valuation(self, owner, pid, extra="", strict=False):
+    def reference(self, ticker, pricing):
+        if pricing == "close":
+            return self.market.closing_quote(ticker, self.now())
+        if pricing != "live":
+            raise Problem("Unknown price basis.")
+        return self.market.quote(ticker)
+
+    def valuation(self, owner, pid, extra="", strict=False, pricing="live"):
         p, positions, realized, pending = self.state(owner, pid)
         quotes = {}
         for ticker in sorted(
             {r["symbol"] for r in positions} | ({extra} if extra else set())
         ):
             try:
-                q = self.market.quote(ticker)
+                q = self.reference(ticker, pricing)
                 number(q["price"], "reference price", D(".00000001"))
                 if strict:
-                    fresh(q, self.now())
+                    validate_reference(q, self.now(), pricing)
                 quotes[ticker] = q
             except Problem:
                 if strict:
@@ -314,7 +321,11 @@ class Ledger:
         from .exits import terms
 
         conditions = terms(data)
+        pricing = data.get("pricing", "live")
+        if pricing not in ("live", "close"):
+            raise Problem("Unknown price basis.")
         return {
+            **({"pricing": "close"} if pricing == "close" else {}),
             **({"exit": conditions} if conditions else {}),
             "symbol": symbol(data.get("symbol")),
             "side": side,
@@ -434,7 +445,7 @@ class Ledger:
             old = existing(db)
             if old:
                 return old
-        v = self.valuation(owner, pid, t["symbol"], True)
+        v = self.valuation(owner, pid, t["symbol"], True, t.get("pricing", "live"))
         preview = self.size(t, v)
         with self.connection(True) as db:
             p = self.account(db, owner, pid, True)
@@ -482,8 +493,8 @@ class Ledger:
         with self.connection(True) as db:
             for r in rows(
                 db,
-                "SELECT id,pid FROM paper_signals WHERE status='Pending' AND CAST(json_extract(preview,'$.oldest_stamp') AS INTEGER)<? LIMIT 500",
-                (self.now() - 120,),
+                "SELECT id,pid FROM paper_signals WHERE status='Pending' AND (created<? OR (COALESCE(json_extract(ticket,'$.pricing'),'live')='live' AND CAST(json_extract(preview,'$.oldest_stamp') AS INTEGER)<?)) LIMIT 500",
+                (self.now() - 120, self.now() - 120),
             ):
                 self.finish(
                     db,
@@ -503,7 +514,10 @@ class Ledger:
                     (pid, sid),
                 ).fetchone()
             if signal and signal["status"] == "Pending":
-                current = self.market.quote(json.loads(signal["ticket"])["symbol"])
+                ticket = json.loads(signal["ticket"])
+                current = self.reference(
+                    ticket["symbol"], ticket.get("pricing", "live")
+                )
         with self.connection(True) as db:
             p = self.account(db, owner, pid)
             r = db.execute(
@@ -527,10 +541,15 @@ class Ledger:
                     )
                 else:
                     try:
-                        fresh({"stamp": x["oldest_stamp"]}, self.now())
+                        if self.now() - r["created"] > 120:
+                            raise Problem("Preview expired. Preview again.", 409)
+                        pricing = t.get("pricing", "live")
+                        validate_reference(
+                            {"stamp": x["oldest_stamp"]}, self.now(), pricing
+                        )
                         if current is None:
                             raise Problem("Fresh quote unavailable.", 409)
-                        fresh(current, self.now())
+                        validate_reference(current, self.now(), pricing)
                         if D(current["price"]) != D(x["price"]):
                             raise Problem(
                                 "Reference price changed. Preview again.", 409
