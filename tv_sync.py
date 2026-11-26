@@ -27,6 +27,9 @@ Environment variables (all optional)
                            Only lists this agent made and you haven't renamed are ever deleted.
   TV_MAX_SYMBOLS           most symbols put in one list (default 1000)
   TV_PUBLIC_URL            this page's address, if RAILWAY_PUBLIC_DOMAIN isn't set
+  TV_SYNC_AT               when the automatic sync runs, HH:MM in SCHEDULE_TZ on weekdays (default 14:00);
+                           asap = right after every run, on any day
+  TV_SYNC_TRIES            most automatic attempts per day (default 2). "Sync now" is never limited.
 """
 from __future__ import annotations
 
@@ -60,6 +63,7 @@ RESOLVED_TTL = 30 * 86400
 UNRESOLVED_TTL = 86400
 CHECK_EVERY = 30
 BACKOFF = 300
+RETRY_GAP = 900      # wait between the day's automatic attempts (TradingView cooldowns last up to 10 minutes)
 TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,9}$")
 STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 RESULT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_[A-Za-z0-9_.-]{1,80}$")
@@ -496,6 +500,15 @@ class TVSync:
                        min_interval=float(env.get("TV_MIN_INTERVAL") or MIN_INTERVAL), sleep=sleep)
         self.state_path = self.dir / "state.json"
         self.symbols_path = self.dir / "symbols.json"
+        at = (env.get("TV_SYNC_AT") or "14:00").strip().lower()
+        clock_time = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", at)
+        # None means "as soon as a run finishes". Anything unreadable falls back to 14:00.
+        self.sync_at: Optional[Tuple[int, int]] = (None if at == "asap" else
+                                                   (int(clock_time[1]), int(clock_time[2])) if clock_time else (14, 0))
+        try:
+            self.sync_tries = max(1, min(10, int(env.get("TV_SYNC_TRIES") or 2)))
+        except ValueError:
+            self.sync_tries = 2
         self._lock = threading.Lock()
         self._retry_at = 0.0
         self.syncing = False
@@ -766,6 +779,8 @@ class TVSync:
                     except TVError as err:
                         errors.append(f"{name}: {err}")
                         self.log(f"TradingView sync failed for '{name}': {err}")
+                        if "QUOTA" in str(err).upper():
+                            break  # Every further call would be refused too and can lengthen the cooldown.
                 if not errors:
                     try:
                         self.cleanup(legacy)
@@ -780,16 +795,59 @@ class TVSync:
             finally:
                 self.syncing = False
 
-    def _sync_quietly(self, force: bool = False) -> None:
+    def _sync_quietly(self, force: bool = False) -> bool:
         try:
             self.sync(force)
             self._retry_at = 0.0
+            return True
         except TVError:
             self._retry_at = self.clock() + BACKOFF
         except Exception as err:  # never let a surprise stop the agent
             self._note(last_error=f"{type(err).__name__}: {err}"[:500], last_error_utc=utc_now().isoformat(timespec="seconds"))
             self.log(f"TradingView sync error: {type(err).__name__}: {err}")
             self._retry_at = self.clock() + BACKOFF
+        return False
+
+    def _auto_tries(self) -> Tuple[str, int, float]:
+        """(today in the schedule's time zone, automatic attempts already used today, time of the last one)."""
+        day = dt.datetime.fromtimestamp(self.clock(), self.tz).date().isoformat()
+        s = self.state()
+        used = s.get("auto_tries") if s.get("auto_day") == day else 0
+        last = s.get("auto_last")
+        return (day, used if isinstance(used, int) else 0, float(last) if isinstance(last, (int, float)) else 0.0)
+
+    def auto_due(self) -> bool:
+        """True when the background loop may try a sync now.
+
+        The attempts are counted in state.json, so a restart or redeploy cannot hand out extra ones.
+        A failing sync used to be retried every five minutes without end, which kept an exhausted
+        TradingView quota exhausted."""
+        now = dt.datetime.fromtimestamp(self.clock(), self.tz)
+        if self.sync_at is not None and (now.weekday() >= 5 or (now.hour, now.minute) < self.sync_at):
+            return False
+        _, used, last = self._auto_tries()
+        return used < self.sync_tries and self.clock() - last >= (RETRY_GAP if used else 0)
+
+    def auto_sync(self) -> None:
+        """One automatic attempt. On a schedule every attempt counts; in asap mode only failed ones do,
+        so several runs in a day are still copied while a failing sync stops after the day's limit."""
+        day, used, _ = self._auto_tries()
+        if self.sync_at is not None:
+            self._note(auto_day=day, auto_tries=used + 1, auto_last=self.clock())
+        if not self._sync_quietly() and self.sync_at is None:
+            self._note(auto_day=day, auto_tries=used + 1, auto_last=self.clock())
+        _, used, _ = self._auto_tries()
+        if self.state().get("last_error") and used >= self.sync_tries:
+            self.log(f"TradingView sync: {used} automatic attempt{'s' if used != 1 else ''} used today. "
+                     "Next automatic attempt on the next scheduled day; Sync now still works.")
+
+    def schedule_text(self) -> str:
+        tries = f"up to {self.sync_tries} time{'s' if self.sync_tries != 1 else ''} a day"
+        if self.sync_at is None:
+            return f"Automatic sync runs right after each scan and strategy run, and stops for the day after {self.sync_tries} failed attempts."
+        zone = dt.datetime.fromtimestamp(self.clock(), self.tz).strftime("%Z")
+        return (f"Automatic sync runs on weekdays at {self.sync_at[0]:02d}:{self.sync_at[1]:02d} {zone}, {tries} "
+                f"({RETRY_GAP // 60} minutes apart). It copies the latest scan and the latest run of each strategy.")
 
     def sync_now(self) -> str:
         if not self.auth.connected():
@@ -800,15 +858,15 @@ class TVSync:
         return "Copying your latest scan and BUY signals to TradingView now. Reload in a minute to see the counts."
 
     def loop(self, stop: threading.Event) -> None:
-        """Background thread: copy each new scan and strategy result as soon as it's finished."""
+        """Background thread: copy the latest scan and strategy results at the scheduled time."""
         if not self.enabled:
             self.log("TradingView sync is off (TRADINGVIEW_SYNC=off)")
             return
         while not stop.is_set():
-            if self.auth.connected() and self.clock() >= self._retry_at:
+            if self.auth.connected():
                 try:
-                    if self.pending():
-                        self._sync_quietly()
+                    if self.auto_due() and not self.syncing and self.pending():
+                        self.auto_sync()
                 except Exception as err:  # keep the loop alive
                     self.log(f"TradingView check failed: {type(err).__name__}: {err}")
             stop.wait(CHECK_EVERY)
@@ -828,7 +886,7 @@ class TVSync:
             self._flash = None
             flash += f"<div class='{'okbox' if kind == 'ok' else 'warn'}' role='status'>{e(text)}</div>"
         out = ["<h1>TradingView watchlists</h1>",
-               "<div class='muted'>After every scan and every strategy run, the agent copies the tickers into your "
+               "<div class='muted'>The agent copies the tickers from your scans and strategy runs into your "
                "TradingView watchlists, so they're ready when you open TradingView.</div>", flash]
         if not self.enabled:
             out.append("<div class='warn'>Sync is turned off (TRADINGVIEW_SYNC=off in Railway → Variables).</div>")
@@ -886,6 +944,7 @@ class TVSync:
                 "time. Old lists are kept until you delete them.</li>") if self.dated else
                "<li>Each list is <b>replaced</b> each time, so it always matches the latest run. Don't add your own "
                "symbols to these lists; use another watchlist for that.</li>") +
-            "<li>Tickers TradingView doesn't know are skipped and listed above. Checks run every 30 seconds.</li>"
+            "<li>Tickers TradingView doesn't know are skipped and listed above.</li>"
+            f"<li>{e(self.schedule_text())} <b>Sync now</b> works at any time.</li>"
             "</ul></div>")
         return "".join(out)

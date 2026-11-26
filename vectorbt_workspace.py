@@ -50,9 +50,10 @@ def submit(st, fields, buys):
     started = time.monotonic()
     rid = fields.get("rid", "")
     target = backtests.profit_target(fields.get("profit_target_pct"))
-    fee = (
-        float(fields.get("commission", "0")) * 100
-    )  # Portal percent to engine basis points.
+    try:
+        fee = float(fields.get("commission") or "0") * 100  # Portal percent to engine basis points.
+    except ValueError:
+        raise ValueError("Enter the commission as a percentage from 0 to 1.") from None
     try:
         holds = [backtests.TARGET_SESSIONS] if target else [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
     except ValueError:
@@ -144,8 +145,19 @@ def export(kind, info, m):
     if kind == "csv":
         string = io.StringIO(newline="")
         writer = csv.writer(string)
-        writer.writerow(trade_headers(info))
-        writer.writerows(m["rows"])
+        # Display rows use "$", thousands separators and a typographic minus, which spreadsheets
+        # read as text. Export the underlying numbers so the columns can be summed and sorted.
+        headers = trade_headers(info)
+        for column, unit in CSV_UNITS.items():
+            headers[column] += unit
+        writer.writerow(headers)
+        values = m.get("row_values") or [None] * len(m["rows"])
+        for row, numbers in zip(m["rows"], values):
+            row = list(row)
+            if numbers is not None:
+                for column, number, places in zip(CSV_UNITS, numbers, (4, 4, 2, 4)):
+                    row[column] = "" if number is None else round(number, places)
+            writer.writerow(row)
         return string.getvalue().encode("utf-8-sig")
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table
@@ -179,6 +191,7 @@ def export(kind, info, m):
     return output.getvalue()
 
 
+CSV_UNITS = {3: " (USD)", 5: " (USD)", 6: " (USD)", 7: " (%)"}  # Column index in TRADE_HEADERS.
 TRADE_GROUPS = {"all": "Total trades", "wins": "Winning trades", "losses": "Losing trades"}
 
 
@@ -417,29 +430,30 @@ def report(job, key, m, window):
         ]
     )
     if not job:
-        status = "Choose a completed daily strategy run to start a backtest."
+        notes = ["Choose a completed daily strategy run to start a backtest."]
     elif job.get("error"):
-        status = job["error"]
+        notes = [job["error"]]
     elif not m:
-        status = "Queued or running"
+        notes = ["Queued or running. This page checks for the result every few seconds."]
     else:
-        status = "Backtest completed" + (
+        notes = ["Backtest completed" + (
             f" · {sum('Pending' in r[8] for r in m['rows'])} pending"
             if "outcomes" in job["result"]
             else ""
-        )
-    if info.get("symbols"):
-        status += ". Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay."
-    if info.get("warmup_sessions"):
-        status += " " + warmup_note(info)
-    if info.get("entry_basis") == "signal_close":
-        status += " Entries assume a fill at the closing price used to calculate the daily signal."
-    if m.get("profit_target_pct"):
-        status += " " + target_rule(info)
-        if m["unscored"]:
-            status += f" Incomplete daily highs left {m['unscored']} closed trades unscored."
-    if m and (open_count := job["result"].get("full_period", {}).get("open_trades", 0)):
-        status += f" {open_count} open at period end, valued at the last close."
+        ) + "."]
+        if info.get("symbols"):
+            notes.append("Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay.")
+        if info.get("warmup_sessions"):
+            notes.append(warmup_note(info))
+        if info.get("entry_basis") == "signal_close":
+            notes.append("Entries assume a fill at the closing price used to calculate the daily signal.")
+        if m.get("profit_target_pct"):
+            notes.append(target_rule(info))
+            if m["unscored"]:
+                notes.append(f"Incomplete daily highs left {m['unscored']} closed trades unscored.")
+        if open_count := job["result"].get("full_period", {}).get("open_trades", 0):
+            notes.append(f"{open_count} open at period end, valued at the last close.")
+    status = " ".join(notes)
     actions = ""
     if m:
         for title, kind in (
@@ -459,7 +473,7 @@ def report(job, key, m, window):
             + " ".join(
                 f"<a href='{view_url(key, hold=h)}'"
                 + (" aria-current='true'" if h == m["hold"] else "")
-                + f">{h} sessions</a>"
+                + f">{h} session{'' if h == 1 else 's'}</a>"
                 for h in info["holds"]
             )
             + "</div>"
@@ -583,6 +597,8 @@ def page(host, query, fields=None, error=""):
                 )
             if key:
                 job = backtests.service("/jobs/" + key)
+        except backtests.JobNotFound as missing:
+            error = error or str(missing)
         except ValueError:
             error = error or "Backtest service unavailable. Refresh to retry."
     else:
@@ -652,6 +668,7 @@ def page(host, query, fields=None, error=""):
             else "<p>No saved backtests available.</p>"
         )
         + "</details></div></main><script>"
+        + f"const VB_PENDING={'true' if job and not job.get('error') and not m else 'false'};"
         + SCRIPT
         + "</script></body></html>"
     )
@@ -716,6 +733,18 @@ document.querySelector('#vb-saved')?.addEventListener('click',()=>document.query
 form.addEventListener('invalid',e=>{if(dates.contains(e.target))dates.open=true;if(picker.contains(e.target))picker.open=true},true);
 form.onsubmit=()=>{updateRange(true);form.querySelector('button').disabled=true;form.querySelector('button').textContent='Submitting…'};
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
+// A queued backtest: look again every 3 seconds, for up to 6 minutes, unless the form is being edited.
+const here=new URL(location.href), polls=Number(here.searchParams.get('poll'))||0;
+if(VB_PENDING){
+  let editing=false;
+  form.addEventListener('input',()=>editing=true);
+  if(polls<120) setTimeout(()=>{
+    if(editing||picker.open||dates.open) return;
+    here.searchParams.set('poll',polls+1);location.replace(here);
+  },3000);
+}else if(here.searchParams.has('poll')){
+  here.searchParams.delete('poll');history.replaceState(null,'',here);
+}
 """
 
 
