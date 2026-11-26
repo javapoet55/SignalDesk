@@ -17,7 +17,7 @@ class TestRunHistoryDelete(unittest.TestCase):
   with self.assertRaises(ValueError):self.st.delete_result(self.rid)
   self.assertTrue(self.folder.exists())
  def test_ui_auth_origin_and_otp_label(self):
-  r,b=self.s.request('GET','/strategies');self.assertIn(b"action='/strategies/results/delete'",b);self.assertIn(b'class=\'ghost delete-run\'',b)
+  r,b=self.s.request('GET','/strategies/history/panel');self.assertIn(b"action='/strategies/results/delete'",b);self.assertIn(b'class=\'ghost delete-run\'',b)
   self.assertIn('Delete run history',_REAL_PROTECTED_CHANGE_LABEL('/strategies/results/delete',('id='+self.rid).encode(),'application/x-www-form-urlencoded'))
   r,_=self.s.request('POST','/strategies/results/delete',auth=None,form={'id':self.rid});self.assertEqual(r.status,303);self.assertTrue(self.folder.exists())
   r,_=self.s.request('POST','/strategies/results/delete',form={'id':self.rid},headers={'Origin':'https://evil.example'});self.assertEqual(r.status,403);self.assertTrue(self.folder.exists())

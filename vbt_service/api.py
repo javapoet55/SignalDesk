@@ -90,6 +90,18 @@ def history():
     ]
 
 
+@app.get("/runs/{run}/latest-backtest", dependencies=[Depends(authorized)])
+def latest_backtest(run: str):
+    with jobs.database() as db:
+        row = db.execute(
+            """SELECT id, request-'bars', result FROM vbt_research
+               WHERE request->>'run' = %s AND result IS NOT NULL AND error IS NULL
+               ORDER BY created DESC, id DESC LIMIT 1""",
+            (run,),
+        ).fetchone()
+    return {"id": str(row[0]), "inputs": row[1], "result": row[2], "error": None} if row else None
+
+
 @app.get("/jobs/{key}", dependencies=[Depends(authorized)])
 def result(key: UUID):
     item = jobs.lookup(key)

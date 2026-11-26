@@ -5,7 +5,7 @@ import strategy_design as design
 
 SECTIONS = (
     ("configure", "Configure & Run"), ("scheduled", "Run Activity"),
-    ("history", "Results & Signals"), ("backtests", "Backtest History"),
+    ("history", "Run History"), ("backtests", "Backtest History"),
     ("versions", "Version History"), ("settings", "Settings"),
 )
 ICONS = {
@@ -18,6 +18,52 @@ ICONS = {
     "tradingview": "M3 18l6-7 4 3 8-10 M15 4h6v6",
     "notebook": "M6 3h13v18H6z M3 7h5 M3 12h5 M3 17h5",
 }
+
+
+WORKSPACE_TABS = (
+    ("backtests", "Strategy Library", "configure"),
+    ("configure", "Run Configuration", "configure"),
+    ("calendar", "Scheduled Runs", "scheduled"),
+    ("scheduled", "Run History", "history"),
+    ("history", "VectorBT PRO", "/vectorbt"),
+    ("settings", "Settings", "settings"),
+)
+
+
+def strategy_navigation(portal_tabs, active):
+    nav = [
+        ("dashboard", "/", "Dashboard"),
+        *portal_tabs,
+        ("backtests", "/vectorbt", "VectorBT PRO"),
+    ]
+
+    def navlink(key, url, label):
+        glyph = (
+            "m2 10 10-8 10 8v11h-7v-7H9v7H2Z"
+            if key == "dashboard"
+            else ICONS.get(key)
+        )
+        image = (
+            f"<svg class='sd-icon' aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.6'><path d='{glyph}'/></svg>"
+            if glyph
+            else design.icon("backtests")
+        )
+        return (
+            f"<a href='{url}'"
+            + (" aria-current='page'" if key == "strategies" else "")
+            + f">{image}{escape('Latest Report' if key == 'report' else label)}</a>"
+        )
+
+    side = "".join(navlink(*item) for item in nav)
+    tabs = "".join(
+        f"<a href='{key if key.startswith('/') else '/strategies?tab=' + key}'"
+        + (f" data-workspace-tab='{key}'" if not key.startswith("/") else "")
+        + (" data-library='true'" if label == "Strategy Library" else "")
+        + (" aria-current='page'" if key == active else "")
+        + f">{design.icon(sym)}{label}</a>"
+        for sym, label, key in WORKSPACE_TABS
+    )
+    return side, tabs
 
 
 def subnav(current="configure"):
@@ -133,7 +179,7 @@ SCRIPT = r"""
     one('#schedule-toggle').setAttribute('aria-expanded','false');
     show();
   });
-  let loaded = false, loading = false, scheduleOpen = false, offset = 0;
+  let loaded = false, loading = false, scheduleOpen = false;
   async function loadBacktests() {
     if (loaded || loading) return;
     loading = true;
@@ -198,7 +244,8 @@ SCRIPT = r"""
     }
 
     if (view === 'backtests') backtests.style.marginTop = '16px';
-    if (view === 'settings') one('#data').open = true;
+    if (view === 'history') loadRunHistory(one('#rh-host'));
+    if (view === 'settings') loadStrategySettings(one('#ss-host'));
     if (view === 'backtests') loadBacktests();
     if (view === 'versions') loadVersions();
     tabs.forEach(tab => {
@@ -215,7 +262,12 @@ SCRIPT = r"""
     event.preventDefault();
     history.pushState(null,'','/strategies?tab=' + key);
     show();
-    if (!tabs.includes(tab)) tabs.find(link => link.dataset.workspaceTab === key).focus();
+    if (tab.dataset.library) {
+      one('.slist')?.scrollIntoView({block:'start'});
+      one('.srow input')?.focus({preventScroll:true});
+    } else if (!tabs.includes(tab) && key !== 'settings') {
+      tabs.find(link => link.dataset.workspaceTab === key)?.focus();
+    }
   });
   addEventListener('popstate', show);
   addEventListener('hashchange', show);
@@ -255,41 +307,6 @@ SCRIPT = r"""
     } catch { window.prompt('Copy strategy filename', button.dataset.copyName); }
   });
   search('#schedule-search',"section[data-panel=scheduled] tbody tr");
-  const detail = document.createElement('dialog');
-  detail.className = 'studio-detail';
-  detail.setAttribute('aria-label', 'Run summary');
-  page.append(detail);
-  page.addEventListener('click', event => {
-    const button = event.target.closest('[data-run-details]');
-    if (!button) return;
-    const row = button.closest('tr'), cells = [...row.cells];
-    const headers = [...row.closest('table').tHead.rows[0].cells];
-    detail.innerHTML = '<h2>Run summary</h2><dl></dl><form method="dialog"><button>Close</button></form>';
-    for (let i = 0; i < cells.length - 1; i++) {
-      const label = document.createElement('dt'), value = document.createElement('dd');
-      label.textContent = headers[i].textContent;
-      value.textContent = cells[i].innerText;
-      detail.querySelector('dl').append(label, value);
-    }
-    detail.querySelector('form').before(row.querySelector('a[href$="/"]').cloneNode(true));
-    detail.showModal();
-  });
-  function historyPage() {
-    const rows = all('section[data-panel=history] tbody tr');
-    const query = one('#history-search').value.trim().toLowerCase();
-    const visible = rows.filter(row => row.textContent.toLowerCase().includes(query));
-    rows.forEach(row => row.hidden = true);
-    visible.slice(offset,offset + 10).forEach(row => row.hidden = false);
-    if (!one('#page-summary')) return;
-    one('#page-summary').textContent = visible.length ? (offset+1)+'–'+Math.min(offset+10,visible.length)+' of '+visible.length : 'No matching runs';
-    one('#previous-page').disabled = offset === 0;
-    one('#next-page').disabled = offset + 10 >= visible.length;
-  }
-  one('#history-search').oninput = () => { offset = 0; historyPage(); };
-  if (one('#previous-page')) {
-    one('#previous-page').onclick = () => { offset -= 10; historyPage(); };
-    one('#next-page').onclick = () => { offset += 10; historyPage(); };
-  }
   page.addEventListener('submit', event => {
     const action = event.submitter?.formAction || event.target.action;
     if ((action.endsWith('/schedule/cancel') || action.endsWith('/delete')) && !confirm('Confirm this change?')) {
@@ -297,6 +314,6 @@ SCRIPT = r"""
     }
     if (event.target === form && event.submitter?.id === 'gobtn') event.submitter.disabled = true;
   });
-  show(); historyPage();
+  show();
 })();
 """

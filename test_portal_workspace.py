@@ -63,9 +63,16 @@ class PortalWorkspaceTests(unittest.TestCase):
                 page.set_viewport_size({"width": width, "height": 1024})
                 for key in ("configure", "scheduled", "history", "backtests", "versions", "settings"):
                     tab = tabs.locator(f"[data-workspace-tab={key}]")
-                    tab.click()
+                    if page.locator("#rh-root").is_visible():
+                        page.locator("#rh-root [data-workspace-tab=configure]").last.click()
+                        tab.click()
+                    elif page.locator("#ss-root").is_visible():
+                        page.get_by_role("link", name="Run Configuration", exact=True).click()
+                    else:
+                        tab.click()
                     self.assertEqual(tab.get_attribute("aria-current"), "page")
-                    self.assertTrue(page.locator(".sd-hero h1").is_visible())
+                    heading = page.locator({"settings":"#ss-root h1", "history":"#rh-root h1"}.get(key,".sd-hero h1"))
+                    heading.wait_for(state="visible")
                     self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width + 1, key)
                     folder = os.getenv("STUDIO_SCREENSHOTS")
                     if folder:

@@ -574,7 +574,7 @@ class TestStrategiesWeb(unittest.TestCase):
             (self.app.strategies.results_dir / res[n]["id"] / "signals.csv").open())]
         want = {"txtbuy": [tick("txtbuy")[i] for i in (1, 3, 6, 8)],  # BUY rows; the repeat is listed once
                 "txtall": tick("txtall"), "txtnone": []}
-        page = self.req("GET", "/strategies")[1].decode()
+        page = self.req("GET", "/strategies/history/panel")[1].decode()
         for n, tickers in want.items():
             rid = res[n]["id"]
             self.assertEqual(res[n]["status"], "ok", n)

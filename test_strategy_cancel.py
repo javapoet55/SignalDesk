@@ -29,7 +29,7 @@ class TestCancel(unittest.TestCase):
   self.assertEqual(sm.read_meta(st.results_dir/'2026-11-01_080001_example')['status'],'cancelled')
  def test_web_auth_origin_and_stop_button(self):
   rid='2026-11-01_080002_example';folder=self.st.results_dir/rid;folder.mkdir();(folder/'meta.json').write_text(json.dumps(dict(id=rid,status='running',strategy='example')))
-  r,b=self.s.request('GET','/strategies');self.assertIn(b"action='/strategies/cancel'",b)
+  r,b=self.s.request('GET','/strategies/history/panel');self.assertIn(b"action='/strategies/cancel'",b)
   r,_=self.s.request('POST','/strategies/cancel',form={'id':rid},headers={'Origin':'https://evil.example'});self.assertEqual(r.status,403)
   r,_=self.s.request('POST','/strategies/cancel',auth=None,form={'id':rid});self.assertEqual(r.status,303)
   self.assertEqual(sm.read_meta(folder)['status'],'running')

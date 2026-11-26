@@ -156,10 +156,12 @@ def export(kind, info, m):
     return output.getvalue()
 
 
-def plot(days, values, benchmark=None, *, draw=False):
+def plot(days, values, benchmark=None, *, draw=False, compact=False):
     if not values:
         return "<p class='vb-empty'>Daily valuations will appear when prices are available.</p>"
     top, bottom, left, right = 14, (98 if draw else 186), 70, 807
+    if compact:
+        top, bottom, left, right = 9, 108, 4, 234
     combined = list(values) + list(benchmark or []) + ([0] if draw else [])
     lo, hi = min(combined), max(combined)
     if lo == hi:
@@ -177,17 +179,18 @@ def plot(days, values, benchmark=None, *, draw=False):
     color = "var(--red)" if draw else "var(--green)"
     label = "Drawdown in percent" if draw else "Equity in dollars"
     out = [
-        f"<svg class='vb-plot' viewBox='0 0 875 {bottom + 26}' role='img' aria-label='{label}'>"
+        f"<svg class='vb-plot' viewBox='0 0 {290 if compact else 875} {bottom + 26}' role='img' aria-label='{label}'>"
     ]
     for i in range(5):
         value = lo + (hi - lo) * i / 4
         tick = f"{value:.1f}%" if draw else f"{value:,.0f}"
         out.append(
-            f"<path d='M{left} {y(value):.1f}H{right}'/><text x='62' y='{y(value) + 4:.1f}' text-anchor='end'>{tick}</text>"
+            f"<path d='M{left} {y(value):.1f}H{right}'/><text x='{right + 4 if compact else 62}' y='{y(value) + 4:.1f}' text-anchor='{'start' if compact else 'end'}'>{tick}</text>"
         )
-    for idx in sorted({round(i * (len(days) - 1) / 5) for i in range(6)}):
+    ticks = 2 if compact else 5
+    for idx in sorted({round(i * (len(days) - 1) / ticks) for i in range(ticks + 1)}):
         out.append(
-            f"<path d='M{x(idx):.1f} {top}V{bottom}'/><text x='{x(idx):.1f}' y='{bottom + 18}' text-anchor='middle'>{esc(days[idx])}</text>"
+            f"<path d='M{x(idx):.1f} {top}V{bottom}'/><text x='{x(idx):.1f}' y='{bottom + 18}' text-anchor='{'start' if compact and not idx else 'middle'}'>{esc(days[idx][:7] if compact else days[idx])}</text>"
         )
     baseline = top if draw else bottom
     pts = points(values)
@@ -204,10 +207,11 @@ def plot(days, values, benchmark=None, *, draw=False):
             )
     last = values[-1]
     tag = f"{last:.2f}%" if draw else f"${last:,.0f}"
-    out.append(
-        f"<text class='vb-end' x='{right + 5}' y='{y(last) + 4:.1f}' style='fill:{color}'>{tag}</text></svg>"
-    )
-    return "".join(out)
+    if not compact:
+        out.append(
+            f"<text class='vb-end' x='{right + 5}' y='{y(last) + 4:.1f}' style='fill:{color}'>{tag}</text>"
+        )
+    return "".join(out) + "</svg>"
 
 
 def view_url(key, **params):

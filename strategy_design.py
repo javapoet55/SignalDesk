@@ -2,6 +2,12 @@
 from html import escape
 
 PATHS = {
+    "failure": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM8 8l8 8m0-8-8 8",
+    "database": "M3 6a9 4 0 1 0 18 0 9 4 0 1 0-18 0Zm0 0v12c0 5 18 5 18 0V6M3 12c0 5 18 5 18 0",
+    "bell": "M18 8a6 6 0 0 0-12 0c0 7-3 8-3 10h18c0-2-3-3-3-10ZM10 21c1 2 3 2 4 0",
+    "users": "M8 12a4 4 0 1 0 0-8 4 4 0 1 0 0 8ZM1 21v-2a7 5 0 0 1 14 0v2ZM16 4a4 4 0 0 1 0 8m2 3c4 0 5 2 5 5",
+    "trash": "M3 6h18M8 6V3h8v3M5 6l1 16h12l1-16M10 10v8m4-8v8",
+    "warning": "M12 2 1 22h22ZM12 9v5m0 3v1",
     "configure": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM10 8l6 4-6 4Z",
     "scheduled": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM12 5v7l5 3",
     "history": "M4 21v-8m6 8V4m6 17v-6m5 6V9",

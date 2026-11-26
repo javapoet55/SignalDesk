@@ -73,6 +73,8 @@ import journal_chart as jc
 import trading_notes as tn
 import notebook as nb
 import portal_workspace as studio
+import strategy_settings
+import run_history
 import vectorbt_workspace as vb_workspace
 import strategy_design as design
 import open_trade_marks as otm  # noqa: E402  interactive journal performance explorer
@@ -1345,6 +1347,7 @@ def render_strategies(app: App) -> str:
     strategies = st.list()
     names = [n for n, _ in strategies]
     sel = st.selection()
+    sel = {**sel, **{key: value for key, value in strategy_settings.prefs(st).items() if key in ("mode", "candles")}}
     chosen = set(sel.get("names") or names)  # first visit: everything selected
     chosen &= set(names)
     sel_scan, sel_mode, sel_when = sel.get("scan", "latest"), sel.get("mode", "close"), sel.get("when", "now")
@@ -1363,7 +1366,6 @@ def render_strategies(app: App) -> str:
     upcoming = [j for j in jobs if j["status"] == "scheduled"]
     missed = [j for j in jobs if j["status"] == "missed"]
     archive = st.results(None)
-    results = archive[:50]
     last_by_name = {}
     for record in archive:
         last_by_name.setdefault(record.get("strategy"), record)
@@ -1550,39 +1552,7 @@ def render_strategies(app: App) -> str:
                 f"<input type='hidden' name='id' value='{e(j['id'], quote=True)}'>"
                 f"<button type='submit' class='ghost'>{label}</button></form></td></tr>")
         out.append("</tbody></table></div>")
-    out.append("</section><section class='card' data-panel='history'><h2>Recent run results</h2>"
-               "<label class='studio-search'>Filter recent runs<input id='history-search' type='search' placeholder='Strategy, date or status'></label>")
-    if results:
-        successful = sum(r.get("status") == "ok" for r in results)
-        failed = sum(r.get("status") == "error" for r in results)
-        out.append(f"<p>{len(results)} recent runs · {successful} successful · {failed} failed</p>")
-        out.append("<div class='wrap'><table><thead><tr><th>Started</th><th>Strategy</th><th>Scan</th>"
-                   "<th>As of</th><th>Prices</th><th>Status</th><th>Signals</th><th></th></tr></thead><tbody>")
-        for m in results:
-            rid, status_r = m.get("id", ""), m.get("status", "")
-            cls = "ok" if status_r == "ok" else ("bad" if status_r == "error" else "")
-            scan = m.get("scan", "")
-            scan_html = (f"<a href='/runs/{e(scan)}/report.html'>{e(_stamp_label(scan))}</a>"
-                         if STAMP_RE.match(scan or "") else "—")
-            src = {"finviz": "FinViz ", "massive": "Massive "}.get(m.get("price_source", ""), "")
-            out.append(
-                f"<tr><td style='white-space:nowrap'>{e(_fmt_short(m.get('started_utc'), s.tz))}</td>"
-                f"<td>{e(_pretty_name(m.get('strategy', '')))}<div class='muted' style='font-size:12px'>"
-                f"{e(m.get('reason', ''))}</div></td><td style='white-space:nowrap'>{scan_html}</td>"
-                f"<td style='white-space:nowrap'>{e(m.get('asof', '—'))}</td>"
-                f"<td>{e(src + ('intraday' if m.get('mode') == 'intraday' else 'close'))}"
-                + (f"<div class='muted' style='font-size:12px'>{e(_candles_text(m.get('candles')))} candles</div>"
-                   if (m.get('candles') or '1d') != '1d' else "") + "</td>"
-                f"<td class='{cls}'>{e(status_r)}</td><td>{e(_counts_text(m.get('counts', {})))}</td>"
-                f"<td class='links'><button type='button' data-run-details>Summary</button><a href='/strategies/results/{e(rid)}/'>View</a>"
-                f"<a href='/strategies/results/{e(rid)}/signals.csv'>CSV</a>"
-                f"<a href='/strategies/results/{e(rid)}/{SIGNAL_TXT}' title='Signal tickers, comma-separated'>"
-                "TXT</a>" + (_cancel_strategy_button(rid, "Stop") if status_r == "running" else _delete_run_button(rid)) + "</td></tr>")
-        out.append("</tbody></table></div><div class='studio-actions'><button type='button' id='previous-page'>Previous</button>"
-                   "<span id='page-summary' aria-live='polite'></span><button type='button' id='next-page'>Next</button></div>")
-    else:
-        out.append("<p class='muted'>Your selected strategies will appear here when you start a run.</p>")
-    out.append("</section>")
+    out.append("</section><div id='rh-host' data-panel='history' hidden></div>")
 
     # ── data & configuration ──
     days = st.prices.trading_days()
@@ -1634,9 +1604,10 @@ def render_strategies(app: App) -> str:
     out.append(f"<div class='muted' style='font-size:13px'>Scan schedule: {e(scan_schedule_summary(app))} "
                "(change it on the <a href='/#scan'>Scans</a> tab). Time zone for "
                f"scheduled runs: {e(s.tz_name)}.</div></details>")
-    out.append("<section class='card' data-panel='settings'><h2>Strategy recovery</h2><div class='studio-actions'><a href='/strategies/archive#versions'>Version history</a><a href='/strategies/archive#trash'>Recycle bin</a></div></section>"
+    out.append("<div id='ss-host' data-panel='settings' hidden></div>"
                "</div><p class='muted'>Information only, not investment advice.</p></main>")
-    out.append("<script>" + studio.SCRIPT + "</script>")
+    out.append("<style>" + strategy_settings.CSS + run_history.CSS + "</style><script>" + strategy_settings.SCRIPT + run_history.SCRIPT
+               + "</script><script>" + studio.SCRIPT + "</script>")
     out.append("<script>(function(){" + _STRAT_JS.replace("__TZ__", json.dumps(s.tz_name))
                .replace("__BUSY__", "true" if busy else "false") + "})();</script></body></html>")
     return "\n".join(x for x in out if x)
@@ -2339,6 +2310,9 @@ def protected_change_label(path: str, raw: bytes, content_type: str) -> Optional
         "/strategies/schedule/cancel": "Cancel strategy schedule", "/scans/schedule/cancel": "Cancel scan schedule",
         "/presets/add": "Add screener preset", "/presets/remove": "Remove screener preset",
         "/strategies/restore": "Restore strategy archive",
+        "/strategies/settings/snapshot": "Save strategy version",
+        "/strategies/settings/reset": "Reset run defaults and notification preferences",
+        "/strategies/settings/purge": "Permanently delete the reviewed recycle bin items",
         "/strategies/tvlink": "Change strategy TradingView link", "/presets/keep": "Change preset Keep setting",
         "/presets/topn": "Change usual top per screen", "/journal/clear": "Delete all journal trades, notes and "
         "import history", "/journal/delete": "Delete journal trade",
@@ -2715,6 +2689,8 @@ class Handler(BaseHTTPRequestHandler):
                               "text/html; charset=utf-8")
         if path.endswith("/cancel"):
             _CHANGES.take(id, session)
+            if change.path.startswith(strategy_settings.ROOT):
+                return self._redirect("/strategies?tab=settings")
             return self._redirect("/strategies" if change.path.startswith("/strategies/") else "/")
         if not change.challenge and not path.endswith("/resend"):
             return self._send(400, render_change(change, "Send a verification code first.").encode(), "text/html; charset=utf-8")
@@ -2859,6 +2835,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._journal_get(path, parts.query)
         st = self.app.strategies
         if st is not None:
+            if path == "/strategies/history/panel":
+                params = {k:v[0] for k,v in urllib.parse.parse_qs(parts.query).items()}
+                return self._html(200, run_history.panel(self.app, params))
+            if path == "/strategies/history/performance":
+                rid = urllib.parse.parse_qs(parts.query).get("rid", [""])[0]
+                if not sm.RESULT_RE.fullmatch(rid) or not (st.results_dir / rid).is_dir():
+                    return self._text(404, "Run not found.")
+                return self._html(200, run_history.performance(rid))
+            if path == "/strategies/settings/panel":
+                return self._html(200, strategy_settings.render(self.app))
             if path == "/vectorbt":
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
                 return vb_workspace.page(self, query)
@@ -2962,6 +2948,7 @@ class Handler(BaseHTTPRequestHandler):
                        "/strategies/prices/test", "/strategies/prices/test-finviz",
                        "/strategies/go", "/strategies/autoset", "/strategies/schedule/cancel", "/strategies/restore",
                        "/journal/add", "/journal/edit", "/journal/notes", "/journal/delete", "/journal/clear")
+        form_routes += tuple(strategy_settings.ROOT + action for action in strategy_settings.ACTIONS)
         if path not in upload_routes + form_routes:
             return self._text(404, "Not found.")
         if not self._same_origin():
@@ -3263,6 +3250,10 @@ class Handler(BaseHTTPRequestHandler):
                 multi = urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
                 form = {k: v[0] for k, v in multi.items()}
                 name = form.get("name", "")
+                if path.startswith(strategy_settings.ROOT):
+                    message = strategy_settings.change(st, path[len(strategy_settings.ROOT):], form, self.app.settings.user)
+                    self.app.set_flash("ok", message, "strategy-settings")
+                    return self._redirect("/strategies?tab=settings")
                 picked = [n for n in multi.get("s", []) if n]
                 if path == "/strategies/backtest":
                     if not os.environ.get("VBT_SERVICE_URL") or not os.environ.get("VBT_SERVICE_TOKEN"):
@@ -3309,6 +3300,9 @@ class Handler(BaseHTTPRequestHandler):
                                     f"{'it' if one else 'them'} under Run activity.")
                 elif path == "/strategies/restore":
                     message = st.restore_strategy(form.get("bucket", ""), form.get("entry", ""))
+                    if form.get("origin") == "settings":
+                        self.app.set_flash("ok", message, "strategy-settings")
+                        return self._redirect("/strategies?tab=settings")
                     self.app.set_flash("ok", message, "archive")
                     return self._redirect("/strategies/archive")
                 elif path == "/strategies/run":
@@ -3343,6 +3337,9 @@ class Handler(BaseHTTPRequestHandler):
                        "#data": "data"}.get(anchor, "strategies")
             self.app.set_flash("ok", message, section)
         except (ValueError, OSError) as err:
+            if path.startswith(strategy_settings.ROOT) or (path == "/strategies/restore" and form.get("origin") == "settings"):
+                self.app.set_flash("error", str(err), "strategy-settings")
+                return self._redirect("/strategies?tab=settings")
             if path == "/strategies/restore":
                 self.app.set_flash("error", str(err), "archive")
                 return self._redirect("/strategies/archive")
