@@ -169,6 +169,16 @@ def warmup_note(info):
     return "The strategy held cash during indicator warm-up for " + ", ".join(counts) + "."
 
 
+def target_rule(info):
+    target = info.get("profit_target_pct")
+    if not target:
+        return ""
+    if info.get("exit_on_target"):
+        return (f"Sell at the first {target:g}% gain from entry, or at the opening price if it gaps above the target. "
+                "If the target is missed, sell at the close of trading day seven. The entry day counts as day one.")
+    return f"A win means the price reached {target:g}% above entry during the hold. Net P/L uses the scheduled exit price."
+
+
 def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     info = job["inputs"]
     result = job["result"]
@@ -218,19 +228,23 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             if target is not None:
                 hits = result.get("target_hits", {}).get(sym)
                 row_hits.append(hits[idx] if hits else None)
+            exit_day, duration = end, hold
+            if info.get("exit_on_target"):
+                fill = result["target_fills"].get(sym, {})
+                exit_day, sell, duration = fill.get("exit", "—"), fill.get("sell"), fill.get("hold")
             if complete:
-                fills.append(dict(pnl=pnl, hold=hold))
+                fills.append(dict(pnl=pnl, hold=duration))
             rows.append(
                 [
                     sym,
                     "Long",
                     start,
                     fmt(buy, "usd"),
-                    end,
+                    exit_day,
                     fmt(sell, "usd"),
                     fmt(pnl, "usd"),
                     fmt(v if complete else None, "pct"),
-                    "Closed" if complete else v,
+                    (f"{duration} sessions" if info.get("exit_on_target") else "Closed") if complete else v,
                 ]
             )
         marks = info.get("close_marks", {})
@@ -243,7 +257,9 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
                 break
             days.append(day)
             equity.append(CAPITAL * ratio / (1 + info["fee_bps"] / 10000))
-        if len(fills) == len(outcomes) and days:
+        if info.get("exit_on_target"):
+            days, equity = result["days"], result["equity"]
+        elif len(fills) == len(outcomes) and days:
             days.append(end)
             equity.append(CAPITAL + sum(t["pnl"] for t in fills))
         context = (
@@ -256,6 +272,8 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             )
             + "</div>"
         )
+        if info.get("exit_on_target"):
+            context = ""
         context += f"<p class='muted'>Signal date {e(info['signal_day'])} · Equal allocation of {fmt(allocation, 'usd')} per symbol from {fmt(CAPITAL, 'usd')}. Open this run again to submit a fresh price snapshot.</p>"
         if all(v[idx] == "Pending entry" for v in outcomes.values()):
             context += f"<p class='notice'>All {len(outcomes)} signals are pending entry on {e(start)}.</p>"
@@ -324,8 +342,9 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     if info.get("warmup_sessions"):
         context += f"<p class='muted'>{e(warmup_note(info))}</p>"
     if target is not None:
-        context += (f"<p class='muted'>Profit target {e(f'{target:g}')}%. A win reaches the target during the hold. "
-                    "Net P/L uses the scheduled exit price.</p>")
+        context += f"<p class='muted'>{e(target_rule(info))}</p>"
+        if not batch and full.get("open_trades"):
+            context += f"<p class='muted'>Open at the end of the replay: {full['open_trades']}. Equity includes their closing valuations.</p>"
     out.append(
         f"<div class='meta'>{e(start)} — {e(end)}<br><small>Daily · VectorBT PRO {e(result['engine'])}</small></div></header>{context}"
     )

@@ -25,6 +25,7 @@ class BacktestRequest(BaseModel):
     holds: list[int] = Field(min_length=1, max_length=10)
     fee_bps: FiniteFloat = Field(ge=0, le=100)
     preparation_seconds: FiniteFloat = Field(default=0, ge=0)
+    exit_on_target: bool = False
     profit_target_pct: FiniteFloat | None = Field(default=None, gt=0)
 
 
@@ -45,7 +46,16 @@ class BasketResearch(Replay):
     ] = Field(min_length=2, max_length=5000)
 
 
+class SessionPrices(BaseModel):
+    open: FiniteFloat | None
+    high: FiniteFloat | None
+    close: FiniteFloat | None
+
+
 class Cohort(BacktestRequest):
+    target_days: list[str] = Field(default_factory=list, max_length=7)
+    completed_sessions: int = Field(default=0, ge=0, le=7)
+    target_bars: dict[str, Annotated[list[SessionPrices], Field(max_length=7)]] = Field(default_factory=dict, max_length=5000)
     source: str
     session_highs: dict[str, Annotated[list[FiniteFloat | None], Field(max_length=252)]] = Field(default_factory=dict, max_length=5000)
     close_marks: dict[str, FiniteFloat | None] = Field(
@@ -110,7 +120,7 @@ def history():
 def latest_backtest(run: str):
     with jobs.database() as db:
         row = db.execute(
-            """SELECT id, request-'bars'-'series'-'session_highs', result, elapsed_seconds FROM vbt_research
+            """SELECT id, request-'bars'-'series'-'session_highs'-'target_bars', result, elapsed_seconds FROM vbt_research
                WHERE request->>'run' = %s AND result IS NOT NULL AND error IS NULL
                ORDER BY created DESC, id DESC LIMIT 1""",
             (run,),

@@ -21,6 +21,9 @@ from backtest_dashboard import result_html as result_html
 _REPLAY_SLOT = threading.BoundedSemaphore(1)
 
 
+TARGET_SESSIONS = 7
+
+
 def profit_target(value):
     if value is None or value.strip() == "":
         return None
@@ -395,6 +398,16 @@ def dataset(
 
 
 def submit_job(data, started):
+    if data.get("profit_target_pct"):
+        data["exit_on_target"] = True
+        if "bars" in data and data.get("source") != "Historical date-range replay":
+            from paper_trading.market import exchange
+
+            days = [bar["day"] for bar in data["bars"]]
+            expected = exchange().sessions_in_range(days[0], days[-1])
+            missing = set(s.date().isoformat() for s in expected) - set(days)
+            if missing:
+                raise ValueError(f"Missing a daily bar on {min(missing)}. Choose a fully covered date range for target exits.")
     data["preparation_seconds"] = time.monotonic() - started
     return service("/jobs", data)["id"]
 
@@ -456,7 +469,11 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
     entry = cal.next_session(cal.date_to_session(meta["asof"], direction="previous"))
     while cal.session_open(entry) <= finished:
         entry = cal.next_session(entry)
-    sessions = [entry] + [cal.session_offset(entry, h) for h in holds]
+    if target is not None:
+        holds = [TARGET_SESSIONS]
+    sessions = [entry] + [
+        cal.session_offset(entry, h - 1 if target is not None else h) for h in holds
+    ]
     dates = [s.date().isoformat() for s in sessions]
     elapsed = [cal.session_open(s) <= now for s in sessions]
     close_days = [
@@ -464,9 +481,17 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
         for s in cal.sessions_in_range(entry, max(sessions))
         if cal.session_close(s) <= now
     ]
-    ratios = {day: [] for day in close_days}
+    ratios = {day: [] for day in close_days} if target is None else {}
     prices = {}
-    session_highs = {}
+    target_bars = {}
+    window = cal.sessions_in_range(entry, sessions[-1]) if target is not None else []
+    observed_days = [s.date().isoformat() for s in window if cal.session_open(s) <= now]
+
+    def positive(value):
+        return (
+            value if value is not None and math.isfinite(value) and value > 0 else None
+        )
+
     for symbol in symbols:
         bars = {}
         if elapsed[0] and re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", symbol):
@@ -485,18 +510,34 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
             bars.get(day, {}).get("o") if ready else None
             for day, ready in zip(dates, elapsed)
         ]
-        prices[symbol] = [
-            v if v is not None and math.isfinite(v) and v > 0 else None for v in values
-        ]
-        if prices[symbol][0]:
-            if target is not None:
-                session_highs[symbol] = [daily_high(bars.get(day, {})) for day in close_days[:max(holds)]]
+        prices[symbol] = [positive(v) for v in values]
+        if target is not None:
+            target_bars[symbol] = []
+            for i, day in enumerate(observed_days):
+                bar = bars.get(day, {})
+                complete = i < len(close_days)
+                target_bars[symbol].append(
+                    dict(
+                        open=positive(bar.get("o")),
+                        high=daily_high(bar) if complete else None,
+                        close=positive(bar.get("c")) if complete else None,
+                    )
+                )
+        elif prices[symbol][0]:
             for day in close_days:
                 close = bars.get(day, {}).get("c")
                 if close and math.isfinite(close) and close > 0:
                     ratios[day].append(close / prices[symbol][0])
     return dict(
-        **({"session_highs": session_highs} if target is not None else {}),
+        **(
+            dict(
+                target_bars=target_bars,
+                target_days=[s.date().isoformat() for s in window],
+                completed_sessions=len(close_days),
+            )
+            if target is not None
+            else {}
+        ),
         close_marks={
             day: sum(values) / len(symbols) if len(values) == len(symbols) else None
             for day, values in ratios.items()

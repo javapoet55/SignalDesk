@@ -12,7 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backtest_dashboard import CSS, result_html, warmup_note
+from backtest_dashboard import CSS, result_html, target_rule, warmup_note
 
 MODES = (
     "Explain results",
@@ -38,7 +38,7 @@ def evidence(job, choice):
     )
     add(
         "Execution assumptions",
-        f"Long-only simulation using daily opens and {info['fee_bps']:g} basis points of fees per side. The model does not estimate bid–ask spread or market impact.",
+        f"Long-only simulation with entries at the daily open and {info['fee_bps']:g} basis points of fees per side. The model does not estimate bid–ask spread or market impact.",
     )
     if "outcomes" in result:
         hold = next(
@@ -49,7 +49,7 @@ def evidence(job, choice):
         returns = [v for v in values if isinstance(v, (int, float))]
         add(
             "Batch design",
-            f"{len(values)} buy signals recorded {info['signal_day']}. Selected hold: {hold} sessions, scheduled entry {info['dates'][0]}, exit {info['dates'][i + 1]}. Equal allocation per ticker.",
+            f"{len(values)} buy signals recorded {info['signal_day']}. Selected hold: {hold} sessions, scheduled entry {info['dates'][0]}, final scheduled exit {info['dates'][i + 1]}. Equal allocation per ticker.",
         )
         counts = collections.Counter(v for v in values if isinstance(v, str))
         add(
@@ -79,7 +79,7 @@ def evidence(job, choice):
         trades = full["trades"]
         add(
             "Historical performance",
-            f"From {result['days'][0]} to {result['days'][-1]} ({len(result['days'])} observations), the strategy closed {trades} trades with a {hold}-session holding period. Starting equity $100,000; final equity ${full['equity'][-1]:,.2f}. Net return {full['return_pct']:+.2f}%.",
+            f"From {result['days'][0]} to {result['days'][-1]} ({len(result['days'])} observations), the strategy closed {trades} trades with a {hold}-session {'maximum hold' if info.get('exit_on_target') else 'holding period'}. Starting equity $100,000; final equity ${full['equity'][-1]:,.2f}. Net return {full['return_pct']:+.2f}%.",
         )
         add(
             "Drawdown",
@@ -116,7 +116,7 @@ def evidence(job, choice):
         if benchmark:
             add(
                 "Benchmark",
-                f"Buy-and-hold return over the same daily close series: {(benchmark[-1] / benchmark[0] - 1) * 100:+.2f}%. The benchmark follows closing prices while strategy trades fill at the open.",
+                f"Buy-and-hold return over the same daily close series: {(benchmark[-1] / benchmark[0] - 1) * 100:+.2f}%. The benchmark follows daily closing prices.",
             )
         add(
             "Parameter selection",
@@ -148,7 +148,7 @@ def evidence(job, choice):
         scores = result_html(job, "", str(hold), metrics_only=True)
         add("Profit target", f"The {info['profit_target_pct']:g}% target was reached in {scores['wins']} of "
             f"{scores['scored']} scored closed trades. {scores['unscored']} closed trades lacked enough price data. "
-            "The dashboard's win rate counts target touches. Net profit uses the scheduled exit at the open.")
+            + target_rule(info))
     return hold, facts
 
 

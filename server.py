@@ -2116,9 +2116,9 @@ def render_result(app: App, rid: str) -> Optional[str]:
                    "<label>Profit target (%) <input type='number' name='profit_target_pct' min='0' step='any' placeholder='Optional'></label> "
                    f"<button>Run backtest</button>{batch_button}</form><p>Choose both dates to replay all buy tickers over that range. Leave dates blank to test the buys at the next session open.</p><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
                    "Python replay uses daily bars available through each evaluation date. "
-                   "Enter at the following open and exit after the selected number of sessions. Days without a saved buy stay flat when out of position. "
+                   "Enter at the following open. A profit target sells on the first touch or at the seventh session’s close. Without a target, the selected holding periods apply. Days without a saved buy stay flat when out of position. "
                    "Compare holding periods on the first 70% of bars and validate the best on the final 30%. "
-                   "Each period includes only trades with both fills inside it.</p></section>")
+                   "Trade statistics count closed positions.</p></section>")
 
     # run details: when, trigger, prices, files, raw output
     names = [f for f in sm.RESULT_FILES if sm.regular_file(d / f, d)]
@@ -3271,7 +3271,7 @@ class Handler(BaseHTTPRequestHandler):
                     started = time.monotonic()
                     target = backtests.profit_target(form.get("profit_target_pct"))
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
-                        [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
+                        [backtests.TARGET_SESSIONS] if target else [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
                         int(form.get("sessions", "60")) if form.get("source") == "replay" else None,
                         interval=(form.get("historical_start",""),form.get("historical_end","")) if form.get("source") == "range" else None)
                     data["profit_target_pct"] = target

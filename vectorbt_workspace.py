@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import backtests
 import dow_benchmark
 import strategies as sm
-from backtest_dashboard import CAPITAL, fmt, result_html, warmup_note
+from backtest_dashboard import CAPITAL, fmt, result_html, target_rule, warmup_note
 from backtest_dashboard import e as esc
 from strategy_design import icon
 
@@ -54,7 +54,7 @@ def submit(st, fields, buys):
         float(fields.get("commission", "0")) * 100
     )  # Portal percent to engine basis points.
     try:
-        holds = [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
+        holds = [backtests.TARGET_SESSIONS] if target else [int(value.strip()) for value in fields.get("holds", "1,5,10").split(",")]
     except ValueError:
         raise ValueError("Enter a holding period in whole trading days, or a comma-separated list to compare.") from None
     symbols = list(
@@ -158,7 +158,7 @@ def export(kind, info, m):
             esc(info["strategy"]) + " · " + esc(info["symbol"]), styles["Heading2"]
         ),
         Paragraph(
-            f"{esc(m['start'])} through {esc(m['end'])} · {m['hold']} sessions · "
+            f"{esc(m['start'])} through {esc(m['end'])} · {'Up to ' if info.get('exit_on_target') else ''}{m['hold']} sessions · "
             f"{info['fee_bps']:g} bps per side" + (f" · Profit target {info['profit_target_pct']:g}%" if info.get("profit_target_pct") else ""),
             styles["BodyText"],
         ),
@@ -194,7 +194,7 @@ def trade_text(info, m, group):
     ]
     heading = (
         f"{info['strategy']} · {TRADE_GROUPS[group]}\n"
-        f"{m['start']} through {m['end']} · Holding period {holding_label(m['hold'])}\n\n"
+        f"{m['start']} through {m['end']} · Holding period {'up to ' if info.get('exit_on_target') else ''}{holding_label(m['hold'])}\n\n"
     )
     if not rows:
         if m["trades"] and not m["rows"]:
@@ -253,13 +253,13 @@ def plot(days, values, benchmark=None, *, dow=None, draw=False, compact=False):
     out.append(
         f"<polygon points='{left},{baseline} {pts} {x(len(values) - 1):.1f},{baseline}' fill='{color}' opacity='.16'/>"
     )
-    for series, stroke in ((benchmark, "var(--benchmark)"), (dow, "var(--dow)"), (values, color)):
+    for series, stroke, key in ((benchmark, "var(--benchmark)", "basket"), (dow, "var(--dow)", "dow"), (values, color, "strategy")):
         if series:
             out.append(
-                f"<polyline points='{points(series)}' fill='none' stroke='{stroke}' stroke-width='2.7'/>"
+                f"<g data-series='{key}'><polyline points='{points(series)}' fill='none' stroke='{stroke}' stroke-width='2.7'/>"
             )
             out.append(
-                f"<circle cx='{x(len(series) - 1):.1f}' cy='{y(series[-1]):.1f}' r='3' fill='{stroke}'/>"
+                f"<circle cx='{x(len(series) - 1):.1f}' cy='{y(series[-1]):.1f}' r='3' fill='{stroke}'/></g>"
             )
     last = values[-1]
     tag = f"{last:.2f}%" if draw else f"${last:,.0f}"
@@ -339,10 +339,10 @@ def report(job, key, m, window):
     dow = dow_benchmark.equity(days, CAPITAL)
     legend = "<span class='vb-legend'><span class='vb-key strategy'>Strategy equity</span>"
     if benchmark:
-        legend += f"<span class='vb-key basket'>Buy &amp; hold · {esc(symbol)}</span>"
+        legend += f"<label><input type='checkbox' checked data-benchmark='basket'><span class='vb-key basket'>Buy &amp; hold · {esc(symbol)}</span></label>"
     if dow:
-        legend += (f"<a class='vb-key dow' href='{dow_benchmark.SOURCE}' target='_blank' rel='noopener' "
-                   "title='DJIA daily closes from FRED, indexed to the starting capital'>Dow Jones (DJIA)</a>")
+        legend += ("<label><input type='checkbox' checked data-benchmark='dow'><span class='vb-key dow'>Dow Jones (DJIA)</span></label>"
+                   f"<a href='{dow_benchmark.SOURCE}' target='_blank' rel='noopener' aria-label='Dow Jones (DJIA) source'>Source</a>")
     elif days:
         legend += "<span>Dow Jones closes unavailable for this period</span>"
     legend += "</span>"
@@ -371,11 +371,28 @@ def report(job, key, m, window):
                         f"href='{view_url(key, hold=m['hold'], trades=group)}' target='_blank' rel='noopener'>{esc(value)}</a>")
         return esc(value)
 
+    target = m.get("profit_target_pct")
+    explanations = {
+        "Total trades": "Number of positions with both an entry and an exit in this result.",
+        "Winning trades": "Closed trades that reached the profit target." if target else "Closed trades with positive net P/L.",
+        "Losing trades": "Closed trades that missed the profit target." if target else "Closed trades with negative net P/L.",
+        "Win rate": "Target hits divided by scored closed trades." if target else "Profitable closed trades divided by all closed trades.",
+        "Average positive P/L": "Average dollar gain across closed trades with positive net P/L, after fees.",
+        "Average negative P/L": "Average dollar loss across closed trades with negative net P/L, after fees.",
+        "Profit factor": "Total gains on profitable trades divided by the absolute total losses on losing trades, after fees.",
+        "Expectancy": "Total net P/L divided by the number of closed trades. This is the average dollar gain or loss per trade.",
+        "Average hold (sessions)": ("Average number of trading days from entry through exit, counting the entry day."
+                                    if info.get("exit_on_target") else "Average number of trading sessions between entry and exit."),
+    }
+    explanations["Average win"] = explanations["Average positive P/L"]
+    explanations["Average loss"] = explanations["Average negative P/L"]
+
     def stat_table(pairs):
         return (
             "<table><thead><tr><th>Metric</th><th>Strategy</th></tr></thead><tbody>"
             + "".join(
-                f"<tr><td>{esc(label)}</td><td>{stat_value(label, value)}</td></tr>"
+                f"<tr><td><details class='vb-info'><summary>{esc(label)} <span aria-hidden='true'>ⓘ</span></summary>"
+                f"<p>{esc(explanations[label])}</p></details></td><td>{stat_value(label, value)}</td></tr>"
                 for label, value in pairs
             )
             + "</tbody></table>"
@@ -389,7 +406,7 @@ def report(job, key, m, window):
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
             ("Profit target", f"{info['profit_target_pct']:g}%" if info.get("profit_target_pct") else "—"),
-            ("Holding period", holding_label(m["hold"]) if m else "—"),
+            ("Holding period", ("Up to " if info.get("exit_on_target") else "") + holding_label(m["hold"]) if m else "—"),
             ("Signals", info.get("source", "—")),
             (
                 "Engine",
@@ -415,7 +432,10 @@ def report(job, key, m, window):
     if info.get("warmup_sessions"):
         status += " " + warmup_note(info)
     if m.get("profit_target_pct"):
-        status += f" A win means the price reached {m['profit_target_pct']:g}% above entry during the hold. P/L uses the scheduled exit price."
+        status += " " + target_rule(info)
+        open_count = job["result"].get("full_period", {}).get("open_trades", 0)
+        if open_count:
+            status += f" {open_count} open at period end, valued at the last close."
         if m["unscored"]:
             status += f" Incomplete daily highs left {m['unscored']} closed trades unscored."
     actions = ""
@@ -431,7 +451,7 @@ def report(job, key, m, window):
     elif job and not job.get("error"):
         actions = f"<a class='vb-action' href='{view_url(key)}'>Refresh result</a>"
     holds = ""
-    if m and "prices" in info:
+    if m and "prices" in info and not info.get("exit_on_target"):
         holds = (
             "<div class='vb-periods'>Hold "
             + " ".join(
@@ -488,13 +508,15 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "<details class='vb-picker'><summary>Symbols<span id='vb-chips'></span></summary><div>"
         f"<label>Symbols<input name='symbols' aria-label='Symbols' value='{esc(value)}' required placeholder='ALL or comma-separated tickers'></label>"
         f"<div class='vb-options'>{options}</div></div></details>"
-        f"<label>Hold (trading days)<input name='holds' list='vb-holds' value='{esc(holds)}' required "
+        f"<label><span id='vb-hold-label'>{'Maximum hold (trading days)' if target else 'Hold (trading days)'}</span>"
+        f"<input name='holds' list='vb-holds' data-fixed='{esc(holds)}' value='{7 if target else esc(holds)}' "
+        + ("readonly " if target else "") + "required "
         "title='Enter one holding period, or comma-separated periods to compare'></label>"
         f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
         "<label>Initial Capital<input readonly value='$100,000'></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
-        "title='Count a trade as a win if the price reaches this gain during the hold. Leave blank to score by net profit.'></label>"
+        "title='Sell on the first target touch or at the seventh trading day’s close. Leave blank for a fixed holding period.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"
@@ -637,6 +659,17 @@ def page(host, query, fields=None, error=""):
 SCRIPT = """
 const form=document.querySelector('.vb-controls');
 form.addEventListener('input',()=>document.querySelector('.vb-recovery')?.remove(),{once:true});
+const holdField=form.elements.holds, targetField=form.elements.profit_target_pct;
+function syncHold(){
+  const active=Number(targetField.value)>0;
+  if(!holdField.readOnly)holdField.dataset.fixed=holdField.value;
+  holdField.value=active?'7':holdField.dataset.fixed;
+  holdField.readOnly=active;
+  document.querySelector('#vb-hold-label').textContent=active?'Maximum hold (trading days)':'Hold (trading days)';
+  holdField.title=active?'Exit on target or at the seventh trading day’s close':'Enter fixed holding periods in trading days';
+}
+targetField.addEventListener('input',syncHold);
+syncHold();
 const dates=form.querySelector('.vb-dates'), caption=dates.querySelector('summary span');
 const {start,end}=form.elements;
 function updateRange(commit=false){
@@ -703,6 +736,9 @@ CSS = """
 .vb-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:16px}.vb-kpi{display:flex;align-items:flex-start;gap:12px;min-height:100px;padding:14px 16px}.vb-kpi .sd-icon{background:var(--jsoft);color:var(--green);border-radius:8px;padding:8px;box-sizing:content-box}.vb-kpi:nth-child(3) .sd-icon{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}.vb-kpi strong{display:block;font-size:25px;line-height:1.5}.vb-kpi small{color:var(--sd-muted)}
 .vb-grid{display:grid;grid-template-columns:minmax(0,2.75fr) minmax(255px,1fr);gap:16px}.vb-grid>div,.vb-grid>aside{display:flex;min-width:0;flex-direction:column;gap:15px}.vb-card h2{font-size:17px;margin:0 0 9px;letter-spacing:-.4px;display:flex;align-items:center;gap:8px}
 .vb-charts header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.vb-charts header h2{margin:0}.vb-legend{display:inline-flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--sd-muted)}.vb-key:before{content:'';display:inline-block;width:12px;height:3px;margin-right:4px;vertical-align:middle;background:var(--green)}.vb-key.basket:before{background:var(--benchmark)}.vb-key.dow:before{background:var(--dow)}.vb-key.dow{color:inherit}.vb-trade-count{text-decoration:underline;text-underline-offset:3px}
+.vb-legend label{display:inline-flex;gap:4px;align-items:center;cursor:pointer;font:inherit}.vb-legend input{margin:0;width:15px;height:15px;accent-color:var(--green)}
+.vb-charts:has([data-benchmark="basket"]:not(:checked)) [data-series="basket"],.vb-charts:has([data-benchmark="dow"]:not(:checked)) [data-series="dow"]{display:none}
+.vb-stats details.vb-info{border:0;margin:0;padding:0;background:none}.vb-stats .vb-info summary{list-style:none;cursor:pointer;padding:0;color:inherit;font:inherit}.vb-info summary::-webkit-details-marker{display:none}.vb-info summary span{color:var(--green)}.vb-info p{color:var(--sd-muted);max-width:33em;margin:5px 0}
 .vb-ranges,.vb-periods{margin-left:auto;display:inline-flex;gap:4px;align-items:center}.vb-ranges a,.vb-periods a{font-size:12px;color:var(--sd-muted);padding:3px 9px;border-radius:12px}.vb-ranges a[aria-current],.vb-periods a[aria-current]{background:var(--btn);color:var(--btnink)}.vb-plot{display:block;width:100%;height:auto}.vb-plot text{fill:var(--sd-muted);font:12px system-ui}.vb-plot path{stroke:var(--edge);stroke-width:.7}.vb-plot .vb-end{font-size:10px;font-weight:700}.vb-divider{border-top:1px solid var(--edge);padding-top:8px}.vb-empty{padding:32px;color:var(--sd-muted)}
 .vb-grid dl{margin:0}.vb-grid dl div{display:flex;justify-content:space-between;gap:7px;border-top:1px solid var(--edge);padding:4px 0;font-size:13px}.vb-grid dd{margin:0;text-align:right;font-weight:550;overflow-wrap:anywhere}.vb-grid dt{color:var(--sd-muted)}
 .vb-stats{display:grid;grid-template-columns:1fr 1fr;gap:25px}.vb-stats table{width:100%;border-collapse:collapse;align-self:start}.vb-stats :is(th,td){font-size:13px;padding:5px 4px;border-width:0 0 1px;text-align:left}.vb-stats :is(th,td):last-child{text-align:right}.vb-stats dl:first-child{border-right:1px solid var(--edge);padding-right:18px}
