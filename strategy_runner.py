@@ -443,6 +443,39 @@ def run_script(mod, path: Path, info: dict, a, out: Path) -> int:
     return code
 
 
+def replay_daily(a) -> int:
+    """Evaluate a generic strategy on one fixed symbol, revealing daily history incrementally."""
+    path = Path(a.strategy)
+    cache = json.loads(Path(a.cache).read_text())
+    if cache.get("timeframes"):
+        raise ValueError("Historical replay currently requires a strategy using daily prices only.")
+    history = cache["history"]
+    sym = v5.cache_symbol(a.symbol, set(cache.get("tickers", [])) | {s for d in history.values() for s in d})
+    dates = [d for d in sorted(history) if d <= a.asof and sym in history[d]]
+    dates = set(dates[-a.sessions:])
+    buys, past = [], {}
+    for day in sorted(history):
+        if day > a.asof:
+            break
+        past[day] = history[day]
+        if day not in dates:
+            continue
+        mod = _import(path)
+        if a.candle_label and isinstance(getattr(mod, "CANDLE_DAYS", None), int):
+            mod.CANDLE_DAYS = 1
+            mod.CANDLE_LABEL = a.candle_label
+        rows = mod.finviz_signals([a.symbol], day, {"tickers": cache.get("tickers", []), "history": past})
+        if not isinstance(rows, list):
+            raise ValueError("The strategy did not return a signal list.")
+        has_status = any("Status" in row for row in rows)
+        if any(str(row.get("Ticker","")).upper() == a.symbol and
+               (not has_status or str(row.get("Status","")).strip() in {"BUY", "BUY SIGNAL", "SIGNAL"})
+               for row in rows):
+            buys.append(day)
+    Path(a.output).write_text(json.dumps({"buys": buys, "days": sorted(dates)}))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -451,8 +484,15 @@ def main(argv=None) -> int:
     r.add_argument("--tickers", required=True); r.add_argument("--cache", required=True)
     r.add_argument("--out", required=True); r.add_argument("--asof"); r.add_argument("--mcap")
     r.add_argument("--candle-label")
+    replay = sub.add_parser("replay"); replay.add_argument("strategy")
+    for key in ("symbol", "cache", "asof", "output"):
+        replay.add_argument("--"+key, required=True)
+    replay.add_argument("--sessions", type=int, choices=range(4, 253), required=True)
+    replay.add_argument("--candle-label")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "replay":
+            return replay_daily(a)
         return cmd_check(Path(a.strategy)) if a.cmd == "check" else cmd_run(a)
     except Exception:
         traceback.print_exc()

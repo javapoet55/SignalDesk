@@ -57,6 +57,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:  # find finviz_agent.py next to this file even under `python -I`
     sys.path.insert(0, str(_HERE))
+import backtests
 import finviz_agent as fa  # noqa: E402  same folder; its rules validate presets added on the page
 import strategies as sm  # noqa: E402  Strategies tab (uploaded .py strategies + price data)
 try:  # TradingView watchlist sync (optional: everything else works without it)
@@ -1353,6 +1354,9 @@ def render_strategies(app: App) -> str:
         "<div class='muted'>Select strategies, then run them together on the same scan.</div>",
         "<p><a href='/strategies/archive'>Recycle bin &amp; version history →</a></p>",
     ]
+    if os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+        out.append("<p><a href='/strategies/backtests'>VectorBT PRO backtest history</a></p>")
+
     if st.price_source == "massive" and st.client is None:
         out.append("<div class='warn'>MASSIVE_API_KEY is not set, so there are no prices to run strategies on.</div>")
     if st.price_source == "finviz" and st.finviz is None:
@@ -2077,6 +2081,22 @@ def render_result(app: App, rid: str) -> Optional[str]:
         out.append("<section class='sigcard'><div class='sc-head'><h2>Signals</h2></div>"
                    "<p class='empty'>No result table was produced. See Strategy output below.</p></section>")
 
+    if (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN") and
+            status == "ok" and meta.get("mode") == "close" and meta.get("candles", "1d") == "1d"):
+        out.append(f"<section class='runcard'><h2>VectorBT PRO backtest</h2><form method='post' action='/strategies/backtest'>"
+                   f"<input type='hidden' name='rid' value='{e(rid)}'><label>Symbol <input name='symbol' required maxlength='15'></label> "
+                   + ("<label>Signals <select name='source'><option value='archive'>Saved signals</option>"
+                      "<option value='replay'>Replay current Python strategy on this symbol</option></select></label> "
+                      "<label>Replay sessions <input type='number' name='sessions' min='4' max='252' value='60'></label> "
+                      if kind == "generic" else "") +
+                   "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
+                   "<label>Fee per side (basis points) <input type='number' name='fee' min='0' max='100' step='any' value='0'></label> "
+                   "<button>Run backtest</button></form><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
+                   "Python replay uses one fixed symbol and daily bars available through each evaluation date. "
+                   "Enter at the following open and exit after the selected number of sessions. Days without a saved buy stay flat when out of position. "
+                   "Compare holding periods on the first 70% of bars and validate the best on the final 30%. "
+                   "Each period includes only trades with both fills inside it.</p></section>")
+
     # run details: when, trigger, prices, files, raw output
     names = [f for f in sm.RESULT_FILES if sm.regular_file(d / f, d)]
     names += sorted(p.name for p in d.glob("*.csv") if p.name not in sm.RESULT_FILES
@@ -2784,6 +2804,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._journal_get(path, parts.query)
         st = self.app.strategies
         if st is not None:
+            if path == "/strategies/backtests" and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+                try:
+                    jobs = backtests.service("/jobs")
+                except ValueError as exc:
+                    return self._text(503, str(exc))
+                links = "".join(f"<li><a href='/strategies/backtests/{html.escape(j['id'])}'>"
+                                f"{html.escape(j['strategy'])} · {html.escape(j['symbol'])}</a> · "
+                                f"{html.escape(j['status'])} · {html.escape(j['created'])}</li>" for j in jobs)
+                return self._html(200, "<!doctype html><meta charset='utf-8'><title>Backtest history</title>"
+                                  "<main><a href='/strategies'>Strategies</a><h1>VectorBT PRO backtests</h1>"
+                                  "<p>Open a completed daily strategy result to start a backtest.</p><ul>"+links+"</ul></main>")
+            match = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})", path)
+            if match and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+                try:
+                    job = backtests.service("/jobs/" + match[1])
+                    return self._html(200, backtests.result_html(job, path))
+                except ValueError as exc:
+                    return self._text(503, str(exc))
             if path == "/strategies/archive":
                 return self._send(200, render_archive(self.app).encode(), "text/html; charset=utf-8")
             if path == "/strategies":
@@ -2848,7 +2886,7 @@ class Handler(BaseHTTPRequestHandler):
         form_routes = ("/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
                        "/presets/topn",
                        "/strategies/delete",
-                       "/strategies/results/delete", "/strategies/tvlink", "/strategies/cancel", "/strategies/note", "/strategies/run",
+                       "/strategies/backtest", "/strategies/results/delete", "/strategies/tvlink", "/strategies/cancel", "/strategies/note", "/strategies/run",
                        "/strategies/auto", "/strategies/mcap/delete", "/strategies/prices/update",
                        "/strategies/prices/test", "/strategies/prices/test-finviz",
                        "/strategies/go", "/strategies/autoset", "/strategies/schedule/cancel", "/strategies/restore",
@@ -3112,6 +3150,14 @@ class Handler(BaseHTTPRequestHandler):
                 form = {k: v[0] for k, v in multi.items()}
                 name = form.get("name", "")
                 picked = [n for n in multi.get("s", []) if n]
+                if path == "/strategies/backtest":
+                    if not os.environ.get("VBT_SERVICE_URL") or not os.environ.get("VBT_SERVICE_TOKEN"):
+                        raise ValueError("VectorBT PRO is not configured.")
+                    data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
+                        [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
+                        int(form.get("sessions", "60")) if form.get("source") == "replay" else None)
+                    job = backtests.service("/jobs", data)
+                    return self._redirect("/strategies/backtests/" + job["id"])
                 if path == "/strategies/go":
                     message, anchor = self._go(picked, form, multi.get("time", [])), "#activity"
                 elif path == "/strategies/autoset":
