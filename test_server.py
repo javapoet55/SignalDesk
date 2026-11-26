@@ -874,4 +874,4 @@ class TestJournalWeb(unittest.TestCase):
         self.assertIn("class='logt' href='/journal/add?symbol=AMD&amp;strategy=fmfi_scanner&amp;date=2026-10-30"
                       "&amp;price=150.25'", page)
         self.assertEqual(page.count("class='logt'"), 1)  # not on NO SIGNAL rows
-        self.assertRegex(page, r"<a href='/journal'>.*?</svg>Journal</a>")
+        self.assertIn("<a href='/journal'>Journal</a>", page)
