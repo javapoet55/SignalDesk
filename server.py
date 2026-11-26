@@ -2089,8 +2089,9 @@ def render_result(app: App, rid: str) -> Optional[str]:
         out.append(f"<section class='runcard'><h2>VectorBT PRO backtest</h2><form method='post' action='/strategies/backtest'>"
                    f"<input type='hidden' name='rid' value='{e(rid)}'><label>Symbol <input name='symbol' required maxlength='15'></label> "
                    + ("<label>Signals <select name='source'><option value='archive'>Saved signals</option>"
-                      "<option value='replay'>Replay current Python strategy on this symbol</option></select></label> "
+                      "<option value='replay'>Replay current Python strategy on this symbol</option><option value='range'>Historical date range</option></select></label> "
                       "<label>Replay sessions <input type='number' name='sessions' min='4' max='252' value='60'></label> "
+                      "<label>Historical start <input type='date' name='historical_start'></label> <label>Historical end <input type='date' name='historical_end'></label> "
                       if kind == "generic" else "") +
                    "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
                    "<label>Fee per side (basis points) <input type='number' name='fee' min='0' max='100' step='any' value='0'></label> "
@@ -3199,7 +3200,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._redirect("/strategies/backtests/" + job["id"])
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
                         [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
-                        int(form.get("sessions", "60")) if form.get("source") == "replay" else None)
+                        int(form.get("sessions", "60")) if form.get("source") == "replay" else None,
+                        interval=(form.get("historical_start",""),form.get("historical_end","")) if form.get("source") == "range" else None)
                     job = backtests.service("/jobs", data)
                     return self._redirect("/strategies/backtests/" + job["id"])
                 if path == "/strategies/go":

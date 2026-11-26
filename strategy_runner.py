@@ -467,6 +467,9 @@ def replay_daily(a) -> int:
         rows = mod.finviz_signals([a.symbol], day, {"tickers": cache.get("tickers", []), "history": past})
         if not isinstance(rows, list):
             raise ValueError("The strategy did not return a signal list.")
+        for row in rows:
+            if str(row.get("Ticker","")).upper() == a.symbol and row.get("Status") in ("ERROR","NOT IN PRICE CACHE"):
+                raise ValueError(f"Strategy could not evaluate {a.symbol} on {day}: {row.get('Error') or row['Status']}")
         has_status = any("Status" in row for row in rows)
         if any(str(row.get("Ticker","")).upper() == a.symbol and
                (not has_status or str(row.get("Status","")).strip() in {"BUY", "BUY SIGNAL", "SIGNAL"})

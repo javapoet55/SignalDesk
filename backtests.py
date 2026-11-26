@@ -75,7 +75,103 @@ def replay(st, meta, cache, symbol, sessions):
         _REPLAY_SLOT.release()
 
 
-def dataset(root, rid, symbol, holds, fee, signal_tickers, manager=None, sessions=None):
+def calendar_replay(manager, meta, cache, history, symbol, start, end):
+    from paper_trading.market import exchange
+    from finviz_prices import parse_quote_csv
+
+    try:
+        first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    except ValueError:
+        raise ValueError("Choose both a historical start date and end date.") from None
+    if first > last or last.isoformat() > meta["asof"] or (last - first).days > 370:
+        raise ValueError(
+            "Choose an ordered historical interval within the run’s as-of date, up to 252 sessions."
+        )
+    expected = [d.date().isoformat() for d in exchange().sessions_in_range(first, last)]
+    if not 4 <= len(expected) <= 252:
+        raise ValueError("Select an interval containing 4–252 NYSE sessions.")
+    key = next(
+        (
+            v
+            for v in (symbol, symbol.replace("-", "."), symbol.replace(".", "-"))
+            if any(v in prices for prices in history.values())
+        ),
+        None,
+    )
+    if key is None:
+        raise ValueError("Choose a symbol in the saved run.")
+    # Preserve the original snapshot wherever possible. Prepend matching Finviz history for indicator warm-up.
+    hist = {d: dict(prices) for d, prices in history.items() if d <= expected[-1]}
+    if manager.finviz and meta.get("price_source", "finviz") == "finviz":
+        for sym in dict.fromkeys((key, "SPY")):
+            path = manager.finviz.cache_dir / (sym + ".csv")
+            if not sm.regular_file(path, manager.finviz.cache_dir):
+                continue
+            archive, _ = parse_quote_csv(path.read_text())
+            earliest = min(
+                (d for d, v in history.items() if sym in v), default="9999-12-31"
+            )
+            if (
+                earliest in archive
+                and sym in history.get(earliest, {})
+                and not math.isclose(
+                    archive[earliest]["c"], history[earliest][sym]["c"], rel_tol=0.001
+                )
+            ):
+                raise ValueError(
+                    "Finviz price histories have different adjustment bases; choose a consistent snapshot."
+                )
+            prior = [d for d in sorted(archive) if d < earliest and d < start][-1000:]
+            window = [d for d in expected if d < earliest and d in archive]
+            for d in prior + window:
+                hist.setdefault(d, {})[sym] = archive[d]
+    if any(
+        not all(
+            isinstance(hist.get(d, {}).get(key, {}).get(k), (int, float))
+            and math.isfinite(hist[d][key][k])
+            and hist[d][key][k] > 0
+            for k in ("o", "c")
+        )
+        for d in expected
+    ):
+        raise ValueError(
+            "The selected symbol lacks a valid daily open or close for at least one session in the interval."
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp)
+        folder.chmod(0o755)
+        snapshot = folder / "history.json"
+        snapshot.write_text(
+            json.dumps(
+                {
+                    "history": hist,
+                    "tickers": json.loads(cache.read_text()).get("tickers", []),
+                }
+            )
+        )
+        snapshot.chmod(0o644)
+        buys, days, version = replay(
+            manager, dict(meta, asof=expected[-1]), snapshot, symbol, len(expected)
+        )
+    if days != set(expected):
+        raise ValueError("The replay did not evaluate every selected session.")
+    return [
+        dict(day=d, open=hist[d][key]["o"], close=hist[d][key]["c"], signal=d in buys)
+        for d in expected
+    ], version
+
+
+def dataset(
+    root,
+    rid,
+    symbol,
+    holds,
+    fee,
+    signal_tickers,
+    manager=None,
+    sessions=None,
+    interval=None,
+):
     if not sm.RESULT_RE.fullmatch(rid) or not re.fullmatch(
         r"[A-Z0-9][A-Z0-9.\-]{0,14}", symbol
     ):
@@ -101,6 +197,21 @@ def dataset(root, rid, symbol, holds, fee, signal_tickers, manager=None, session
         raise ValueError("Choose a completed strategy run with daily closing prices.")
     version = meta.get("strategy_sha256")
     history = json.loads(cache.read_text())["history"]
+    if interval is not None:
+        bars, version = calendar_replay(
+            manager, meta, cache, history, symbol, *interval
+        )
+        return dict(
+            strategy=meta["strategy"],
+            version=version,
+            run=rid,
+            symbol=symbol,
+            bars=bars,
+            observed_days=len(bars),
+            holds=holds,
+            fee_bps=fee,
+            source="Historical date-range replay",
+        )
     bars = []
     for day, prices in sorted(history.items()):
         if day > meta["asof"]:

@@ -120,3 +120,40 @@ class BatchSignals(unittest.TestCase):
             self.assertEqual(request["dates"][:2], ["2026-11-27", "2026-11-30"])
             self.assertEqual(len(request["prices"]), 125)
             self.assertFalse(any(request["elapsed"]))
+
+
+class CalendarReplayTests(unittest.TestCase):
+    def test_selects_exact_calendar_month_and_preserves_prior_history(self):
+        from unittest.mock import patch
+        from backtests import calendar_replay
+        from paper_trading.market import exchange
+
+        days = [
+            s.date().isoformat()
+            for s in exchange().sessions_in_range("2026-09-25", "2026-11-03")
+        ]
+        hist = {day: {"ABC": {"o": 10, "c": 10}} for day in days}
+        october = [day for day in days if day.startswith("2026-10")]
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "history.json"
+            cache.write_text(json.dumps({"history": hist, "tickers": ["ABC"]}))
+
+            def check(manager, meta, snapshot, symbol, count):
+                data = json.loads(snapshot.read_text())["history"]
+                self.assertEqual(max(data), "2026-10-30")
+                self.assertIn("2026-09-25", data)
+                self.assertEqual(count, 22)
+                return {october[1]}, set(october), "v1"
+
+            with patch("backtests.replay", check):
+                bars, _ = calendar_replay(
+                    SimpleNamespace(finviz=None),
+                    {"asof": "2026-11-03"},
+                    cache,
+                    hist,
+                    "ABC",
+                    "2026-10-01",
+                    "2026-10-31",
+                )
+            self.assertEqual([b["day"] for b in bars], october)
+            self.assertTrue(bars[1]["signal"])
