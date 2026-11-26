@@ -20,6 +20,25 @@ from backtest_dashboard import result_html as result_html
 _REPLAY_SLOT = threading.BoundedSemaphore(1)
 
 
+def profit_target(value):
+    if value is None or value.strip() == "":
+        return None
+    try:
+        target = float(value)
+    except ValueError:
+        target = 0
+    if not math.isfinite(target) or target <= 0:
+        raise ValueError("Enter a positive profit target percentage or leave it blank.")
+    return target
+
+
+def daily_high(bar):
+    value = bar.get("h")
+    if isinstance(value, (int, float)) and math.isfinite(value) and value > 0 and value >= max(bar["o"], bar["c"]):
+        return value
+    return None
+
+
 def replay(st, meta, cache, symbol, sessions):
     strategy = st.meta().get(meta["strategy"], {})
     if strategy.get("kind") != "generic" or not 4 <= sessions <= 252:
@@ -178,6 +197,7 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
             dict(
                 day=d,
                 open=hist[d][key]["o"],
+                high=daily_high(hist[d][key]),
                 close=hist[d][key]["c"],
                 signal=d in by_symbol[ticker],
             )
@@ -271,7 +291,7 @@ def dataset(
             and bar[k] > 0
             for k in ("o", "c")
         ):
-            bars.append(dict(day=day, open=bar["o"], close=bar["c"], signal=False))
+            bars.append(dict(day=day, open=bar["o"], high=daily_high(bar), close=bar["c"], signal=False))
     if not 4 <= len(bars) <= 3000:
         raise ValueError("Choose a symbol with 4–3000 daily bars in the selected run.")
     if sessions is not None:
@@ -367,7 +387,7 @@ def service(path, data=None):
         ) from exc
 
 
-def cohort(manager, rid, holds, fee, signal_tickers, now=None):
+def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
     """Freeze the exact buy list, then look up observed opens on the required sessions."""
     import finviz_prices
     from paper_trading.market import exchange
@@ -415,6 +435,7 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None):
     ]
     ratios = {day: [] for day in close_days}
     prices = {}
+    session_highs = {}
     for symbol in symbols:
         bars = {}
         if elapsed[0] and re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", symbol):
@@ -437,11 +458,14 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None):
             v if v is not None and math.isfinite(v) and v > 0 else None for v in values
         ]
         if prices[symbol][0]:
+            if target is not None:
+                session_highs[symbol] = [daily_high(bars.get(day, {})) for day in close_days[:max(holds)]]
             for day in close_days:
                 close = bars.get(day, {}).get("c")
                 if close and math.isfinite(close) and close > 0:
                     ratios[day].append(close / prices[symbol][0])
     return dict(
+        **({"session_highs": session_highs} if target is not None else {}),
         close_marks={
             day: sum(values) / len(symbols) if len(values) == len(symbols) else None
             for day, values in ratios.items()

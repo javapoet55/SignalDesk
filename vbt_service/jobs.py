@@ -44,7 +44,7 @@ def submit(key, data):
 def lookup(key: UUID):
     with database() as db:
         row = db.execute(
-            "SELECT request-'bars'-'series', result, error, elapsed_seconds FROM vbt_research WHERE id=%s",
+            "SELECT request-'bars'-'series'-'session_highs', result, error, elapsed_seconds FROM vbt_research WHERE id=%s",
             (key,),
         ).fetchone()
         return dict(inputs=row[0], result=row[1], error=row[2], elapsed_seconds=row[3]) if row else None

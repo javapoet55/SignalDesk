@@ -2112,7 +2112,7 @@ def render_result(app: App, rid: str) -> Optional[str]:
                       "<label>Historical start <input type='date' name='historical_start'></label> <label>Historical end <input type='date' name='historical_end'></label> "
                       if kind == "generic" else "") +
                    "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
-                   "<label>Fee per side (basis points) <input type='number' name='fee' min='0' max='100' step='any' value='0'></label> "
+                   "<label>Profit target (%) <input type='number' name='profit_target_pct' min='0' step='any' placeholder='Optional'></label> "
                    f"<button>Run backtest</button>{batch_button}</form><p>Choose both dates to replay all buy tickers over that range. Leave dates blank to test the buys at the next session open.</p><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
                    "Python replay uses daily bars available through each evaluation date. "
                    "Enter at the following open and exit after the selected number of sessions. Days without a saved buy stay flat when out of position. "
@@ -3264,13 +3264,16 @@ class Handler(BaseHTTPRequestHandler):
                         job_id = vb_workspace.submit(st, {
                             "rid": form.get("rid", ""), "symbols": "ALL", "holds": form.get("holds", ""),
                             "commission": str(float(form.get("fee", "0")) / 100), "start": start, "end": end,
+                            "profit_target_pct": form.get("profit_target_pct", ""),
                         }, signal_tickers)
                         return self._redirect("/vectorbt?job=" + job_id)
                     started = time.monotonic()
+                    target = backtests.profit_target(form.get("profit_target_pct"))
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
                         [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
                         int(form.get("sessions", "60")) if form.get("source") == "replay" else None,
                         interval=(form.get("historical_start",""),form.get("historical_end","")) if form.get("source") == "range" else None)
+                    data["profit_target_pct"] = target
                     job_id = backtests.submit_job(data, started)
                     return self._redirect("/vectorbt?job=" + job_id)
                 if path == "/strategies/go":

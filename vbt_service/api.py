@@ -12,6 +12,7 @@ from . import jobs
 class Bar(BaseModel):
     day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     open: FiniteFloat = Field(gt=0)
+    high: FiniteFloat | None = Field(default=None, gt=0)
     close: FiniteFloat = Field(gt=0)
     signal: bool
 
@@ -24,6 +25,7 @@ class BacktestRequest(BaseModel):
     holds: list[int] = Field(min_length=1, max_length=10)
     fee_bps: FiniteFloat = Field(ge=0, le=100)
     preparation_seconds: FiniteFloat = Field(default=0, ge=0)
+    profit_target_pct: FiniteFloat | None = Field(default=None, gt=0)
 
 
 class Replay(BacktestRequest):
@@ -44,6 +46,7 @@ class BasketResearch(Replay):
 
 class Cohort(BacktestRequest):
     source: str
+    session_highs: dict[str, Annotated[list[FiniteFloat | None], Field(max_length=252)]] = Field(default_factory=dict, max_length=5000)
     close_marks: dict[str, FiniteFloat | None] = Field(
         default_factory=dict, max_length=253
     )
@@ -106,7 +109,7 @@ def history():
 def latest_backtest(run: str):
     with jobs.database() as db:
         row = db.execute(
-            """SELECT id, request-'bars'-'series', result, elapsed_seconds FROM vbt_research
+            """SELECT id, request-'bars'-'series'-'session_highs', result, elapsed_seconds FROM vbt_research
                WHERE request->>'run' = %s AND result IS NOT NULL AND error IS NULL
                ORDER BY created DESC, id DESC LIMIT 1""",
             (run,),

@@ -120,6 +120,18 @@ class BatchSignals(unittest.TestCase):
             self.assertEqual(request["dates"][:2], ["2026-11-27", "2026-11-30"])
             self.assertEqual(len(request["prices"]), 125)
             self.assertFalse(any(request["elapsed"]))
+            (root / "ABC.csv").write_text(
+                "Date,Open,High,Low,Close\n"
+                "2026-11-27,300,302,299,301\n"
+                "2026-11-30,301,306,298,299\n"
+                "2026-12-01,299,320,297,302\n"
+            )
+            snapshot = cohort(
+                manager, rid, [2, 1], 0, lambda _: ["ABC"],
+                now=dt.datetime.fromisoformat("2026-12-01T15:00:00+00:00"), target=2,
+            )
+            self.assertEqual(snapshot["prices"]["ABC"], [300, 299, 301])
+            self.assertEqual(snapshot["session_highs"]["ABC"], [302, 306])
 
 
 class CalendarReplayTests(unittest.TestCase):

@@ -2,12 +2,25 @@
 
 import math
 from datetime import date
+from decimal import Decimal
 
 import pandas as pd
 import vectorbtpro as vbt
 
 
-def simulate(series, start, end, hold, fee_bps, detail=False):
+def reached_target(entry, target_pct, highs, hold, observed_price):
+    """A witnessed touch is definitive. A miss requires highs for the entire hold."""
+    threshold = Decimal(str(entry)) * (1 + Decimal(str(target_pct)) / 100)
+    observed_highs = [high for high in highs if high is not None]
+    peak = max([observed_price, *observed_highs])
+    if Decimal(str(peak)) >= threshold:
+        return True
+    if len(observed_highs) == hold:
+        return False
+    return None
+
+
+def simulate(series, start, end, hold, fee_bps, detail=False, target=None):
     window = {symbol: bars[start:end] for symbol, bars in series.items()}
     days = [bar["day"] for bar in next(iter(window.values()))]
     index = pd.DatetimeIndex(days)
@@ -46,19 +59,28 @@ def simulate(series, start, end, hold, fee_bps, detail=False):
         "equity": [round(float(x), 2) for x in equity],
     }
     if detail:
-        result["fills"] = [
-            dict(
-                symbol=opens.columns[t["col"]],
-                entry=days[t["entry_idx"]],
-                exit=days[t["exit_idx"]],
-                buy=t["entry_price"],
-                sell=t["exit_price"],
-                pnl=t["pnl"],
-                pct=t["return"] * 100,
-                hold=t["exit_idx"] - t["entry_idx"],
-            )
-            for t in records.sort_values(["entry_idx", "col"]).to_dict("records")
-        ]
+        fills = []
+        for t in records.sort_values(["entry_idx", "col"]).to_dict("records"):
+            fill = {
+                "symbol": opens.columns[t["col"]],
+                "entry": days[t["entry_idx"]],
+                "exit": days[t["exit_idx"]],
+                "buy": t["entry_price"],
+                "sell": t["exit_price"],
+                "pnl": t["pnl"],
+                "pct": t["return"] * 100,
+                "hold": t["exit_idx"] - t["entry_idx"],
+            }
+            if target is not None:
+                bars = window[fill["symbol"]]
+                held = bars[t["entry_idx"]:t["exit_idx"]]
+                exit_open = bars[t["exit_idx"]]["open"]
+                observed = max(exit_open, *(max(b["open"], b["close"]) for b in held))
+                fill["target_hit"] = reached_target(
+                    held[0]["open"], target, [b.get("high") for b in held], fill["hold"], observed
+                )
+            fills.append(fill)
+        result["fills"] = fills
         result["benchmark"] = (
             closes.div(closes.iloc[0]).mean(axis=1) * 100000
         ).tolist()
@@ -68,6 +90,8 @@ def simulate(series, start, end, hold, fee_bps, detail=False):
 def cohort_returns(data):
     holds, elapsed, prices = data["holds"], data["elapsed"], data["prices"]
     outcomes = {symbol: [] for symbol in prices}
+    target = data.get("profit_target_pct")
+    hits = {}
     for i, hold in enumerate(holds, 1):
         completed = {}
         for symbol, series in prices.items():
@@ -83,6 +107,12 @@ def cohort_returns(data):
                 completed[symbol] = [series[0], series[i]]
                 status = None
             outcomes[symbol].append(status)
+            if target is not None:
+                hit = None
+                if status is None:
+                    highs = data.get("session_highs", {}).get(symbol, [])[:hold]
+                    hit = reached_target(series[0], target, highs, hold, series[i])
+                hits.setdefault(symbol, []).append(hit)
         if completed:
             frame = pd.DataFrame(
                 completed, index=pd.to_datetime([data["dates"][0], data["dates"][i]])
@@ -99,7 +129,10 @@ def cohort_returns(data):
             )
             for symbol, value in pf.total_return.items():
                 outcomes[symbol][-1] = float(value) * 100
-    return {"outcomes": outcomes, "engine": vbt.__version__}
+    result = {"outcomes": outcomes, "engine": vbt.__version__}
+    if target is not None:
+        result["target_hits"] = hits
+    return result
 
 
 def calculate(data):
@@ -165,6 +198,7 @@ def calculate(data):
         if best
         else None,
         "full_period": simulate(
-            series, 0, len(bars), best["hold"] if best else holds[0], fee, detail=True
+            series, 0, len(bars), best["hold"] if best else holds[0], fee, detail=True,
+            target=data.get("profit_target_pct"),
         ),
     }

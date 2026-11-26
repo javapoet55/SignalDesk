@@ -12,7 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backtest_dashboard import CSS
+from backtest_dashboard import CSS, result_html
 
 MODES = (
     "Explain results",
@@ -142,6 +142,11 @@ def evidence(job, choice):
                 "Sample size",
                 f"Only {trades} closed trades underpin this result. Individual trades can materially change win rate and average profit.",
             )
+    if info.get("profit_target_pct"):
+        scores = result_html(job, "", str(hold), metrics_only=True)
+        add("Profit target", f"The {info['profit_target_pct']:g}% target was reached in {scores['wins']} of "
+            f"{scores['scored']} scored closed trades. {scores['unscored']} closed trades lacked enough price data. "
+            "The dashboard's win rate counts target touches. Net profit uses the scheduled exit at the open.")
     return hold, facts
 
 

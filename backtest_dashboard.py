@@ -182,8 +182,10 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         )
         return "".join(out) + "</main></body></html>"
     batch = "outcomes" in result
+    target = info.get("profit_target_pct")
     rows = []
     row_pnl = []
+    row_hits = []
     fills = []
     benchmark = None
     extra = ""
@@ -205,6 +207,9 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             complete = isinstance(v, (float, int))
             pnl = allocation * v / 100 if complete else None
             row_pnl.append(pnl)
+            if target is not None:
+                hits = result.get("target_hits", {}).get(sym)
+                row_hits.append(hits[idx] if hits else None)
             if complete:
                 fills.append(dict(pnl=pnl, hold=hold))
             rows.append(
@@ -260,6 +265,8 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         benchmark = full.get("benchmark")
         for t in fills:
             row_pnl.append(t["pnl"])
+            if target is not None:
+                row_hits.append(t.get("target_hit"))
             rows.append(
                 [
                     t.get("symbol", info["symbol"]),
@@ -306,6 +313,9 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             ),
             "half",
         )
+    if target is not None:
+        context += (f"<p class='muted'>Profit target {e(f'{target:g}')}%. A win reaches the target during the hold. "
+                    "Net P/L uses the scheduled exit price.</p>")
     out.append(
         f"<div class='meta'>{e(start)} — {e(end)}<br><small>Daily · VectorBT PRO {e(result['engine'])}</small></div></header>{context}"
     )
@@ -322,11 +332,25 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     pnl = [t["pnl"] for t in fills]
     wins = [v for v in pnl if v > 0]
     losses = [v for v in pnl if v < 0]
+    row_groups = []
+    for index, value in enumerate(row_pnl):
+        if value is None:
+            group = "pending"
+        elif target is not None:
+            group = {True: "wins", False: "losses", None: "unscored"}[row_hits[index]]
+        else:
+            group = "wins" if value > 0 else "losses" if value < 0 else "flat"
+        row_groups.append(group)
+        if target is not None:
+            rows[index].append({"wins": "Hit", "losses": "Missed", "unscored": "High unavailable", "pending": "—"}[group])
+    win_count, loss_count = row_groups.count("wins"), row_groups.count("losses")
+    unscored = row_groups.count("unscored")
+    scored = len(fills) - unscored
     total = 100 * (equity[-1] / CAPITAL - 1) if equity else None
     if batch and len(fills) == len(result["outcomes"]):
         total = net / CAPITAL * 100
     maxdd = min(dd) if dd else None
-    rate = 100 * len(wins) / len(fills) if fills else None
+    rate = 100 * win_count / scored if scored else None
     annual = None
     sharpe = None
     if len(equity) > 1:
@@ -348,7 +372,8 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     if metrics_only:
         return dict(days=days, equity=equity, benchmark=benchmark, drawdown=dd, hold=hold,
                     start=start, end=end, total=total, sharpe=sharpe, maxdd=maxdd, rate=rate,
-                    annual=annual, trades=n, wins=len(wins), losses=len(losses), rows=rows, row_pnl=row_pnl,
+                    annual=annual, trades=n, wins=win_count, losses=loss_count, rows=rows, row_pnl=row_pnl,
+                    row_groups=row_groups, profit_target_pct=target, scored=scored, unscored=unscored,
                     avg_win=mean(wins), avg_loss=mean(losses), expectancy=mean(pnl),
                     profit_factor=(sum(wins) / -sum(losses) if losses else math.inf if wins else None),
                     avg_hold=mean([t["hold"] for t in fills]))
@@ -412,11 +437,12 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             "Trade analysis",
             facts(
                 [
-                    ("Winning / losing", f"{len(wins)} / {len(losses)}"),
-                    ("Average win", fmt(mean(wins), "usd")),
-                    ("Average loss", fmt(mean(losses), "usd")),
-                    ("Largest win", fmt(max(wins, default=None), "usd")),
-                    ("Largest loss", fmt(min(losses, default=None), "usd")),
+                    ("Target hits / misses" if target else "Winning / losing", f"{win_count} / {loss_count}"),
+                    *([("Closed trades with incomplete highs", str(unscored))] if unscored else []),
+                    ("Average positive P/L" if target else "Average win", fmt(mean(wins), "usd")),
+                    ("Average negative P/L" if target else "Average loss", fmt(mean(losses), "usd")),
+                    ("Largest realized gain" if target else "Largest win", fmt(max(wins, default=None), "usd")),
+                    ("Largest realized loss" if target else "Largest loss", fmt(min(losses, default=None), "usd")),
                     (
                         "Average hold",
                         fmt(mean([t["hold"] for t in fills])) + " sessions"
@@ -443,6 +469,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
                     "Net P/L",
                     "Return",
                     "Status" if batch else "Hold time",
+                    *(["Target outcome"] if target else []),
                 ],
                 rows,
             )

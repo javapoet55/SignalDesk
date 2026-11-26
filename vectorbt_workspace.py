@@ -49,6 +49,7 @@ def eligible(st):
 def submit(st, fields, buys):
     started = time.monotonic()
     rid = fields.get("rid", "")
+    target = backtests.profit_target(fields.get("profit_target_pct"))
     fee = (
         float(fields.get("commission", "0")) * 100
     )  # Portal percent to engine basis points.
@@ -85,7 +86,7 @@ def submit(st, fields, buys):
         return symbols
 
     if basket and not start:
-        data = backtests.cohort(st, rid, holds, fee, selected)
+        data = backtests.cohort(st, rid, holds, fee, selected, target=target)
     else:
         tickers = selected(st.results_dir / rid) if basket else symbols
         data = backtests.dataset(
@@ -98,6 +99,7 @@ def submit(st, fields, buys):
             st,
             interval=(start, end) if start else None,
         )
+    data["profit_target_pct"] = target
     return backtests.submit_job(data, started)
 
 
@@ -124,8 +126,8 @@ def stats(m):
         ("Winning trades", str(m.get("wins", "—"))),
         ("Losing trades", str(m.get("losses", "—"))),
         ("Win rate", fmt(m.get("rate"), "pct")),
-        ("Average win", fmt(m.get("avg_win"), "usd")),
-        ("Average loss", fmt(m.get("avg_loss"), "usd")),
+        ("Average positive P/L" if m.get("profit_target_pct") else "Average win", fmt(m.get("avg_win"), "usd")),
+        ("Average negative P/L" if m.get("profit_target_pct") else "Average loss", fmt(m.get("avg_loss"), "usd")),
         (
             "Profit factor",
             "∞"
@@ -142,7 +144,7 @@ def export(kind, info, m):
     if kind == "csv":
         string = io.StringIO(newline="")
         writer = csv.writer(string)
-        writer.writerow(TRADE_HEADERS)
+        writer.writerow(trade_headers(info))
         writer.writerows(m["rows"])
         return string.getvalue().encode("utf-8-sig")
     from reportlab.lib.styles import getSampleStyleSheet
@@ -157,7 +159,7 @@ def export(kind, info, m):
         ),
         Paragraph(
             f"{esc(m['start'])} through {esc(m['end'])} · {m['hold']} sessions · "
-            f"{info['fee_bps']:g} bps per side",
+            f"{info['fee_bps']:g} bps per side" + (f" · Profit target {info['profit_target_pct']:g}%" if info.get("profit_target_pct") else ""),
             styles["BodyText"],
         ),
         Spacer(1, 14),
@@ -180,16 +182,15 @@ def export(kind, info, m):
 TRADE_GROUPS = {"all": "Total trades", "wins": "Winning trades", "losses": "Losing trades"}
 
 
+def trade_headers(info):
+    return TRADE_HEADERS + ([f"Target outcome ({info['profit_target_pct']:g}%)"] if info.get("profit_target_pct") else [])
+
+
 def trade_text(info, m, group):
     rows = [
         row
-        for row, pnl in zip(m["rows"], m["row_pnl"])
-        if pnl is not None
-        and (
-            group == "all"
-            or (group == "wins" and pnl > 0)
-            or (group == "losses" and pnl < 0)
-        )
+        for row, outcome in zip(m["rows"], m["row_groups"])
+        if outcome != "pending" and (group == "all" or outcome == group)
     ]
     heading = (
         f"{info['strategy']} · {TRADE_GROUPS[group]}\n"
@@ -201,7 +202,7 @@ def trade_text(info, m, group):
         return heading + "No closed trades match this list.\n"
     return (
         heading
-        + "\t".join(TRADE_HEADERS)
+        + "\t".join(trade_headers(info))
         + "\n"
         + "".join("\t".join(map(str, row)) + "\n" for row in rows)
     )
@@ -323,7 +324,8 @@ def report(job, key, m, window):
                 else "Portfolio return",
                 "Annualized",
                 "Peak to trough",
-                f"{m.get('wins', 0)} / {m.get('trades', 0)} trades",
+                (f"{m['wins']} / {m['scored']} hit target" if m.get("profit_target_pct")
+                 else f"{m.get('wins', 0)} / {m.get('trades', 0)} trades"),
                 "Annualized",
             ),
         )
@@ -386,7 +388,7 @@ def report(job, key, m, window):
             ("Price bars", "Daily"),
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
-            ("Commission", f"{info['fee_bps'] / 100:g}% per side" if info else "—"),
+            ("Profit target", f"{info['profit_target_pct']:g}%" if info.get("profit_target_pct") else "—"),
             ("Holding period", holding_label(m["hold"]) if m else "—"),
             ("Signals", info.get("source", "—")),
             (
@@ -404,12 +406,16 @@ def report(job, key, m, window):
         status = "Queued or running"
     else:
         status = "Backtest completed" + (
-            f" · {sum(isinstance(r[-1], str) and 'Pending' in r[-1] for r in m['rows'])} pending"
+            f" · {sum('Pending' in r[8] for r in m['rows'])} pending"
             if "outcomes" in job["result"]
             else ""
         )
     if info.get("symbols"):
         status += ". Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay."
+    if m.get("profit_target_pct"):
+        status += f" A win means the price reached {m['profit_target_pct']:g}% above entry during the hold. P/L uses the scheduled exit price."
+        if m["unscored"]:
+            status += f" Incomplete daily highs left {m['unscored']} closed trades unscored."
     actions = ""
     if m:
         for title, kind in (
@@ -458,6 +464,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         if selected_symbols and set(selected_symbols) == set(symbols):
             value = "ALL"
     commission = fields.get("commission", format(info.get("fee_bps", 0) / 100, "g"))
+    target = fields.get("profit_target_pct", info.get("profit_target_pct") or "")
     start, end = fields.get("start", ""), fields.get("end", "")
     if not fields and info.get("source") == "Historical date-range replay":
         start, end = info.get("_start", ""), info.get("_end", "")
@@ -479,7 +486,9 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "title='Enter one holding period, or comma-separated periods to compare'></label>"
         f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
         "<label>Initial Capital<input readonly value='$100,000'></label>"
-        f"<label>Commission (%)<input name='commission' type='number' min='0' max='1' step='any' value='{esc(commission)}' required></label>"
+        f"<input type='hidden' name='commission' value='{esc(commission)}'>"
+        f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
+        "title='Count a trade as a win if the price reaches this gain during the hold. Leave blank to score by net profit.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"

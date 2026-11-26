@@ -30,7 +30,7 @@ class RangeSubmission(unittest.TestCase):
             )
             symbols = ["ANF", "TGLS", "CCCC", "CELC"]
             history = {
-                d: {s: {"o": 10, "c": 10} for s in symbols}
+                d: {s: {"o": 10, "c": 10, "h": 10.5} for s in symbols}
                 for d in days + ["2026-11-24"]
             }
             (folder / "history_cache.json").write_text(
@@ -66,16 +66,18 @@ class RangeSubmission(unittest.TestCase):
                         submit(
                             manager,
                             dict(
-                                rid=rid, symbols=selection, start=days[0], end=days[-1]
+                                rid=rid, symbols=selection, start=days[0], end=days[-1], profit_target_pct="2"
                             ),
                             lambda _: symbols,
                         ),
                         "job",
                     )
                     data = service.call_args.args[1]
+                    self.assertEqual(data["profit_target_pct"], 2)
                     self.assertEqual(list(data["series"]), expected)
                     self.assertEqual(data["observed_days"], len(days))
                     for s, bars in data["series"].items():
+                        self.assertTrue(all(b["high"] == 10.5 for b in bars))
                         self.assertEqual([b["day"] for b in bars], days)
                         self.assertEqual(
                             [b["day"] for b in bars if b["signal"]],
@@ -96,6 +98,56 @@ class RangeSubmission(unittest.TestCase):
 
 
 class PortfolioCalculation(unittest.TestCase):
+    def test_profit_target_touch_within_open_to_open_hold(self):
+        try:
+            from vbt_service.engine import calculate
+        except ModuleNotFoundError as exc:
+            if exc.name == "vectorbtpro":
+                self.skipTest("Licensed VectorBT PRO runtime required")
+            raise
+        from vectorbt_workspace import report_data, trade_text
+
+        days = [f"2026-10-{d:02d}" for d in (1, 2, 5, 6, 7, 8, 9, 12, 13, 14)]
+
+        def bars(entry_high, exit_open):
+            bars = [{"day": d, "open": 300, "close": 300, "high": 300, "signal": i == 0} for i, d in enumerate(days)]
+            bars[0]["high"] = 350  # The signal-day high occurs before entry.
+            bars[1]["high"] = entry_high
+            bars[3].update(open=exit_open, high=350)  # Only the open is owned on exit day.
+            return bars
+
+        series = {"HIT": bars(306, 295), "MISS": bars(305.99, 303), "GAP": bars(None, 306), "UNKNOWN": bars(None, 299)}
+        info = {"run": "example", "symbol": "4 symbols", "strategy": "daily", "series": series, "holds": [2], "fee_bps": 0}
+        target = dict(info, profit_target_pct=2)
+        result = calculate(target)
+        baseline = calculate(info)
+        self.assertEqual(result["full_period"]["equity"], baseline["full_period"]["equity"])
+        metrics = report_data({"inputs": target, "result": result, "error": None}, "")
+        self.assertEqual((metrics["wins"], metrics["losses"], metrics["unscored"], metrics["scored"]), (2, 1, 1, 3))
+        self.assertAlmostEqual(metrics["rate"], 200 / 3)
+        for group, symbols in [("wins", {"HIT", "GAP"}), ("losses", {"MISS"}), ("all", set(series))]:
+            listing = trade_text(target, metrics, group)
+            self.assertEqual({s for s in series if s+"\tLong" in listing}, symbols)
+        self.assertEqual(report_data({"inputs": info, "result": baseline, "error": None}, "")["wins"], 2)
+
+    def test_saved_buy_targets_follow_each_holding_period(self):
+        try:
+            from vbt_service.engine import calculate
+        except ModuleNotFoundError as exc:
+            if exc.name == "vectorbtpro":
+                self.skipTest("Licensed VectorBT PRO runtime required")
+            raise
+        data = {
+            "holds": [2, 1], "elapsed": [True, True, True], "fee_bps": 0,
+            "dates": ["2026-10-01", "2026-10-05", "2026-10-02"], "profit_target_pct": 2,
+            "prices": {"ABC": [300, 295, 301], "NOHIGH": [300, 299, 299], "NODATA": [None, None, None]},
+            "session_highs": {"ABC": [302, 306], "NOHIGH": [305, None]},
+        }
+        result = calculate(data)
+        self.assertEqual(result["target_hits"], {"ABC":[True, False], "NOHIGH":[None, False], "NODATA":[None,None]})
+        self.assertLess(result["outcomes"]["ABC"][0], 0)
+        self.assertGreater(result["outcomes"]["ABC"][1], 0)
+
     def test_capital_fees_and_dates_for_overlapping_signals(self):
         try:
             from vbt_service.engine import calculate
