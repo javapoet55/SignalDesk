@@ -813,10 +813,42 @@ def report_nav_bar() -> bytes:
             + theme_control() + "</div>").encode("utf-8")
 
 
+REPORT_TICKER_VIEWS = r"""<script id="report-ticker-views">
+for (const heading of document.querySelectorAll("h2")) {
+  if (!heading.textContent.startsWith("Summary — ")) continue;
+  const table = heading.nextElementSibling?.querySelector("table");
+  if (!table) continue;
+  const header = document.createElement("th");
+  header.textContent = "View";
+  table.tHead.rows[0].append(header);
+  for (const row of table.tBodies[0].rows) {
+    const anchor = row.cells[0].querySelector("a[href^='#']");
+    const section = anchor && document.getElementById(anchor.getAttribute("href").slice(1));
+    const symbols = section ? Array.from(section.querySelectorAll("tbody tr"),
+      item => item.cells[1].querySelector("a").textContent.trim()) : [];
+    const cell = row.insertCell();
+    if (!symbols.length) {
+      cell.textContent = "—";
+      continue;
+    }
+    const link = document.createElement("a");
+    link.textContent = "View";
+    link.setAttribute("aria-label", "View ranked tickers for " + anchor.textContent);
+    link.href = URL.createObjectURL(new Blob([symbols.join(",") + "\n"],
+      {type: "text/plain;charset=utf-8"}));
+    link.target = "_blank";
+    link.rel = "noopener";
+    cell.append(link);
+  }
+}
+</script>"""
+
+
 def themed_report(body: bytes) -> bytes:
     """Apply the Journal palette when serving both existing and future reports."""
     if b"<body>" not in body:
         return body
+    body = body.replace(b"</body>", REPORT_TICKER_VIEWS.encode() + b"</body>", 1)
     palette = _JOURNAL_DESIGN_CSS.split(".journal-app main", 1)[0]
     style = """
 :root{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
