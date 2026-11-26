@@ -845,11 +845,50 @@ for (const heading of document.querySelectorAll("h2")) {
 </script>"""
 
 
+REPORT_COPY_SYMBOLS = r"""<script id="report-copy-symbols">
+document.addEventListener("toggle", event => {
+  const box = event.target.matches?.("details.report-symbols[open]") && event.target.querySelector("textarea");
+  if (box) { box.focus(); box.select(); }
+}, true);
+document.addEventListener("click", event => {
+  const button = event.target.closest("[data-copy-symbols]");
+  if (!button) return;
+  const box = button.parentElement.querySelector("textarea");
+  box.focus(); box.select();
+  const done = () => { button.textContent = "Copied"; setTimeout(() => button.textContent = "Copy", 1800); };
+  const fallback = () => { document.execCommand("copy"); done(); };
+  if (navigator.clipboard) navigator.clipboard.writeText(box.value).then(done, fallback); else fallback();
+});
+</script>"""
+
+
+def _report_symbol_boxes(body: bytes) -> bytes:
+    """Give every ranked screen table a "Copy Symbols" box holding its tickers, comma separated."""
+    def add(match: "re.Match[bytes]") -> bytes:
+        section = match[0]
+        symbols = list(dict.fromkeys(re.findall(rb"quote[.]ashx[?]t=[^'\"]+['\"][^>]*>([^<]+)</a>", section)))
+        if not symbols:
+            return section
+        title = re.search(rb"<h3>(.*?)</h3>", section)
+        label = b"Symbols in " + (title[1] if title else b"this table") + b", comma separated"
+        box = (b"<details class='report-symbols'><summary>Copy Symbols</summary><div>"
+               b"<textarea readonly rows='2' aria-label='" + label.replace(b"'", b"&#x27;") + b"'>"
+               + b",".join(symbols) + b"</textarea>"
+               b"<button type='button' data-copy-symbols>Copy</button></div></details>")
+        marker = b"<details><summary>Diagnostics</summary>"
+        if marker in section:
+            return section.replace(marker, box + marker, 1)
+        return section[:-len(b"</section>")] + box + b"</section>"
+
+    return re.sub(rb"<section class='card' id='[^']*'>.*?</section>", add, body, flags=re.S)
+
+
 def themed_report(body: bytes) -> bytes:
     """Apply the Journal palette when serving both existing and future reports."""
     if b"<body>" not in body:
         return body
-    body = body.replace(b"</body>", REPORT_TICKER_VIEWS.encode() + b"</body>", 1)
+    body = _report_symbol_boxes(body)
+    body = body.replace(b"</body>", (REPORT_TICKER_VIEWS + REPORT_COPY_SYMBOLS).encode() + b"</body>", 1)
     palette = _JOURNAL_DESIGN_CSS.split(".journal-app main", 1)[0]
     style = """
 :root{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
@@ -857,6 +896,12 @@ def themed_report(body: bytes) -> bytes:
 .journal-app .card{border-radius:15px;padding:22px;box-shadow:var(--jshadow)}
 .journal-app th{background:var(--bg)}.journal-app tbody tr:hover{background:var(--jsoft)}
 .report-note{font-size:11px;margin-left:6px;padding:2px 6px;border:1px solid var(--line);border-radius:5px}
+.report-symbols{margin-top:12px}.report-symbols summary{cursor:pointer;font-weight:600;color:var(--accent);width:max-content}
+.report-symbols div{display:flex;gap:10px;align-items:flex-start;margin-top:8px}
+.report-symbols textarea{flex:1;min-width:0;font:13px/1.5 ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);
+border:1px solid var(--line);border-radius:8px;padding:9px 10px;resize:vertical}
+.report-symbols button{font:inherit;font-size:13px;font-weight:600;border:1px solid var(--line);border-radius:8px;
+background:var(--btn);color:var(--btnink);padding:8px 14px;cursor:pointer}
 .journal-app h1{letter-spacing:-.7px}.journal-app h2{letter-spacing:-.3px}
 .report-nav{max-width:1280px;margin:auto;padding:20px 30px;display:flex;align-items:center;
 gap:20px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
