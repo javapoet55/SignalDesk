@@ -161,7 +161,7 @@ def facts(pairs):
     )
 
 
-def result_html(job, refresh_path, hold_choice=""):
+def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     info = job["inputs"]
     result = job["result"]
     out = [
@@ -170,6 +170,8 @@ def result_html(job, refresh_path, hold_choice=""):
         f"<header class='top'><div><small>Backtest Results</small><h1>{e(info['strategy'])} <span class='muted'>/</span> {e(info['symbol'])}</h1><div class='muted'>{e(info.get('source', 'Archived signals'))}</div></div>",
     ]
     if not result or job["error"]:
+        if metrics_only:
+            return {}
         out.append(
             "</header>"
             + (
@@ -340,6 +342,13 @@ def result_html(job, refresh_path, hold_choice=""):
     def mean(seq):
         return statistics.mean(seq) if seq else None
 
+    if metrics_only:
+        return dict(days=days, equity=equity, benchmark=benchmark, drawdown=dd, hold=hold,
+                    start=start, end=end, total=total, sharpe=sharpe, maxdd=maxdd, rate=rate,
+                    annual=annual, trades=n, wins=len(wins), losses=len(losses), rows=rows,
+                    avg_win=mean(wins), avg_loss=mean(losses), expectancy=mean(pnl),
+                    profit_factor=(sum(wins) / -sum(losses) if losses else math.inf if wins else None),
+                    avg_hold=mean([t["hold"] for t in fills]))
     out.append(
         "<div class='strip'>"
         + "".join(

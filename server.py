@@ -73,6 +73,7 @@ import journal_chart as jc
 import trading_notes as tn
 import notebook as nb
 import portal_workspace as studio
+import vectorbt_workspace as vb_workspace
 import strategy_design as design
 import open_trade_marks as otm  # noqa: E402  interactive journal performance explorer
 import email.parser  # noqa: E402
@@ -1472,7 +1473,7 @@ def render_strategies(app: App) -> str:
         out.append("<p class='muted'>No upcoming time schedules.</p>")
     out.append(f"</section><section class='card'><h2>{design.icon('chain')} Quick Links</h2>"
                "<a class='sd-item' href='/strategies/archive'>Recycle bin &amp; version history &nbsp; →</a>"
-               "<a class='sd-item' href='/strategies/backtests'>VectorBT PRO backtest history &nbsp; →</a></section></aside>")
+               "<a class='sd-item' href='/vectorbt'>VectorBT PRO Backtesting &nbsp; →</a></section></aside>")
     out.append("<div class='under' data-panel='scheduled'>"
                "<label><input type='checkbox' name='auto' id='auto'"
                + (" checked" if auto["names"] else "") + "> Run selected strategies after each new scan</label>"
@@ -2858,6 +2859,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._journal_get(path, parts.query)
         st = self.app.strategies
         if st is not None:
+            if path == "/vectorbt":
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
+                return vb_workspace.page(self, query)
             if path == "/strategies/backtests":
                 jobs = []
                 message = "VectorBT PRO is unavailable. The backtest service is not configured."
@@ -2867,14 +2871,14 @@ class Handler(BaseHTTPRequestHandler):
                         message = "" if jobs else "No historical simulations yet."
                     except ValueError:
                         message = "The backtest service is unavailable. Refresh to retry."
-                rows = "".join(f"<tr><td><a href='/strategies/backtests/{html.escape(j['id'])}'>"
+                rows = "".join(f"<tr><td><a href='/vectorbt?job={html.escape(j['id'])}'>"
                                f"{html.escape(j['strategy'])}</a></td><td>{html.escape(j['symbol'])}</td>"
                                f"<td>{html.escape(j['status'])}</td><td>{html.escape(j['created'])}</td></tr>" for j in jobs)
                 return self._html(200, "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
                                   "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Backtest history</title>"
                                   + _THEME_INIT + f"<style>{_CSS}{_JOURNAL_DESIGN_CSS}</style></head><body class='journal-app'><main>"
                                   + render_tabs("strategies") + studio.subnav("backtests") + "<h1>VectorBT PRO</h1>"
-                                  "<p>Historical simulations · <a href='/strategies?tab=history'>Choose a strategy run to backtest</a></p>"
+                                  "<p><a href='/vectorbt'>Open VectorBT PRO workspace</a> · Historical simulations · <a href='/strategies?tab=history'>Choose a strategy run to backtest</a></p>"
                                   "<div class='card wrap'>" + (message or "<table><thead><tr><th>Strategy</th><th>Symbols</th>"
                                   "<th>Status</th><th>Created</th></tr></thead><tbody>" + rows + "</tbody></table>") + "</div></main></body></html>")
             research = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})/copilot", path)
@@ -2950,7 +2954,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(303, b"", "text/plain; charset=utf-8",
                               {"Location": "/login?signed_out=1", "Set-Cookie": self._session_cookie("logged-out")})
         upload_routes = ("/strategies/upload", "/strategies/mcap", "/journal/import")
-        form_routes = ("/strategies/copilot", "/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
+        form_routes = ("/vectorbt/run", "/strategies/copilot", "/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
                        "/presets/topn",
                        "/strategies/delete",
                        "/strategies/backtest", "/strategies/results/delete", "/strategies/tvlink", "/strategies/cancel", "/strategies/note", "/strategies/run",
@@ -3008,6 +3012,15 @@ class Handler(BaseHTTPRequestHandler):
         return self._html(status,copilot.render(key,hold,facts,reports,message))
 
     def _apply_post(self, path: str, raw: bytes, content_type: Optional[str] = None) -> None:
+        if path == "/vectorbt/run":
+            fields = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True).items()}
+            try:
+                if not (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN")):
+                    raise ValueError("VectorBT PRO is not configured.")
+                key = vb_workspace.submit(self.app.strategies, fields, signal_tickers)
+                return self._redirect("/vectorbt?job=" + key)
+            except (ValueError, OSError) as err:
+                return vb_workspace.page(self, {}, fields, str(err))
         if path == "/strategies/copilot":
             form = {k:v[0] for k,v in urllib.parse.parse_qs(raw.decode("utf-8",errors="replace"),keep_blank_values=True).items()}
             return self._research_copilot(form.get("job",""), form.get("hold",""), form=form)
@@ -3258,13 +3271,13 @@ class Handler(BaseHTTPRequestHandler):
                         data = backtests.cohort(st, form.get("rid", ""), [int(h.strip()) for h in form.get("holds", "").split(",")],
                                                 float(form.get("fee", "0")), signal_tickers)
                         job = backtests.service("/jobs", data)
-                        return self._redirect("/strategies/backtests/" + job["id"])
+                        return self._redirect("/vectorbt?job=" + job["id"])
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
                         [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
                         int(form.get("sessions", "60")) if form.get("source") == "replay" else None,
                         interval=(form.get("historical_start",""),form.get("historical_end","")) if form.get("source") == "range" else None)
                     job = backtests.service("/jobs", data)
-                    return self._redirect("/strategies/backtests/" + job["id"])
+                    return self._redirect("/vectorbt?job=" + job["id"])
                 if path == "/strategies/go":
                     message, anchor = self._go(picked, form, multi.get("time", [])), "#activity"
                 elif path == "/strategies/autoset":

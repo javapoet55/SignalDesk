@@ -49,6 +49,7 @@ def shell(tabs, active, controls):
         icon = f"<svg viewBox='0 0 24 24' aria-hidden='true'><path d='{ICONS[key]}'/></svg>"
         links.append(f"<a href='{url}'" + (" aria-current='page'" if selected else "")
                      + f">{icon}{escape(label)}</a>")
+    links.insert(2, "<a href='/vectorbt'>" + design.icon("backtests") + "VectorBT PRO</a>")
     return ("<style>" + CSS + "</style><aside class='studio-rail' id='studio-rail'>"
             "<a href='/' class='studio-brand'><i aria-hidden='true'><span></span><span></span><span></span></i>Finviz Agent</a>"
             "<nav aria-label='Portal modules'>" + "".join(links) + "</nav></aside>"
