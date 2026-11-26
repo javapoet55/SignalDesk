@@ -62,28 +62,30 @@ def submit(st, fields, buys):
     start, end = fields.get("start", ""), fields.get("end", "")
     if bool(start) != bool(end):
         raise ValueError("Choose both dates for historical replay.")
-    if symbols == ["ALL"] or len(symbols) > 1:
-        if start:
+    basket = symbols == ["ALL"] or len(symbols) > 1
+    if not sm.RESULT_RE.fullmatch(rid) or (st.results_dir / rid).is_symlink():
+        raise ValueError("Choose a saved strategy run.")
+
+    def selected(folder):
+        available = buys(folder)
+        if symbols == ["ALL"]:
+            if not available:
+                raise ValueError("This run has no buy signals to select.")
+            return available
+        if set(symbols) - set(available):
             raise ValueError(
-                "A buy basket uses the selected run’s signal date. Clear the date range or choose one symbol for historical replay."
+                "Each symbol in a basket must be a buy from the selected strategy run."
             )
+        return symbols
 
-        def selected(folder):
-            available = buys(folder)
-            if symbols == ["ALL"]:
-                return available
-            if set(symbols) - set(available):
-                raise ValueError(
-                    "Each symbol in a basket must be a buy from the selected strategy run."
-                )
-            return symbols
-
+    if basket and not start:
         data = backtests.cohort(st, rid, holds, fee, selected)
     else:
+        tickers = selected(st.results_dir / rid) if basket else symbols
         data = backtests.dataset(
             st.results_dir,
             rid,
-            symbols[0],
+            tickers[0] if len(tickers) == 1 else tickers,
             holds,
             fee,
             buys,
@@ -275,7 +277,7 @@ def report(job, key, m, window):
     )
     ranges = links(key, m, window) if days else ""
     symbol = info.get("symbol", "—")
-    symbol_names = list(info.get("prices", {}))
+    symbol_names = info.get("symbols") or list(info.get("prices", {}))
     basket_label = ", ".join(symbol_names[:6]) + (
         f" +{len(symbol_names) - 6}" if len(symbol_names) > 6 else ""
     )
@@ -339,6 +341,8 @@ def report(job, key, m, window):
             if "outcomes" in job["result"]
             else ""
         )
+    if info.get("symbols"):
+        status += ". Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay."
     actions = ""
     if m:
         for title, kind in (
@@ -382,12 +386,9 @@ def controls(runs, rid, info, symbols, enabled, fields):
     )
     value = fields.get("symbols")
     if value is None:
-        value = (
-            ",".join(info.get("prices", {}))
-            if info.get("prices")
-            else info.get("symbol", "ALL")
-        )
-        if info.get("prices") and set(info["prices"]) == set(symbols):
+        selected_symbols = info.get("symbols") or list(info.get("prices", {}))
+        value = ",".join(selected_symbols) if selected_symbols else info.get("symbol", "ALL")
+        if selected_symbols and set(selected_symbols) == set(symbols):
             value = "ALL"
     commission = fields.get("commission", format(info.get("fee_bps", 0) / 100, "g"))
     start, end = fields.get("start", ""), fields.get("end", "")
@@ -415,7 +416,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "<label>Historical end<input name='end' type='date' value='"
         + esc(end)
         + "'></label>"
-        "<small>Choose both dates to replay one symbol with a supported daily Python strategy. Baskets use the run’s signal date.</small>"
+        "<small>Choose both dates to recalculate daily signals for the selected tickers. Leave dates blank to use saved signals.</small>"
         "<label>Holding periods (sessions)<input name='holds' required value='"
         + esc(holds)
         + "'></label></div></details>"

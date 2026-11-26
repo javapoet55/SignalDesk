@@ -72,6 +72,8 @@ def evidence(job, choice):
             "The tickers come from one signal date and share market conditions. The number of tickers does not establish independent observations across time.",
         )
     else:
+        if info.get("symbols"):
+            add("Ticker selection", f"The replay uses a fixed list of {len(info['symbols'])} tickers selected from the saved run. Starting capital is split equally. Selecting the list after the replay window can introduce selection bias.")
         full = result["full_period"]
         hold = full["hold"]
         trades = full["trades"]

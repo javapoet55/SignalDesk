@@ -1,4 +1,4 @@
-"""Prepare one historical symbol series from completed Finviz strategy runs."""
+"""Prepare historical symbol series from completed Finviz strategy runs."""
 
 import datetime as dt
 import json
@@ -51,7 +51,7 @@ def replay(st, meta, cache, symbol, sessions):
                 "replay",
                 str(script),
                 "--symbol",
-                symbol,
+                symbol if isinstance(symbol, str) else ",".join(symbol),
                 "--cache",
                 str(cache),
                 "--asof",
@@ -65,17 +65,24 @@ def replay(st, meta, cache, symbol, sessions):
                 args += ["--candle-label", sm.candles_label("1d")]
             timeout = min(90, st.timeout)
             code, _ = sm.run_sandboxed(args, work, log, timeout, timeout, st.mem_mb)
-            if code or output.stat().st_size > 20000:
+            symbol_count = 1 if isinstance(symbol, str) else len(symbol)
+            if code or output.stat().st_size > 20000 * symbol_count:
                 raise ValueError(
                     "Historical Python replay failed or timed out. Try fewer sessions or archived signals."
                 )
             result = json.loads(output.read_text())
-            return set(result["buys"]), set(result["days"]), version
+            buys = result["buys"]
+            signals = (
+                {s: set(days) for s, days in buys.items()}
+                if isinstance(buys, dict)
+                else set(buys)
+            )
+            return signals, set(result["days"]), version
     finally:
         _REPLAY_SLOT.release()
 
 
-def calendar_replay(manager, meta, cache, history, symbol, start, end):
+def calendar_replay(manager, meta, cache, history, symbol, start, end, *, tickers=None):
     from paper_trading.market import exchange
     from finviz_prices import parse_quote_csv
 
@@ -90,20 +97,27 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end):
     expected = [d.date().isoformat() for d in exchange().sessions_in_range(first, last)]
     if not 4 <= len(expected) <= 252:
         raise ValueError("Select an interval containing 4–252 NYSE sessions.")
-    key = next(
-        (
-            v
-            for v in (symbol, symbol.replace("-", "."), symbol.replace(".", "-"))
-            if any(v in prices for prices in history.values())
-        ),
-        None,
-    )
-    if key is None:
-        raise ValueError("Choose a symbol in the saved run.")
+    symbols = [symbol] if isinstance(symbol, str) else symbol
+    available = {ticker for prices in history.values() for ticker in prices}
+    keys = {}
+    for ticker in symbols:
+        key = next(
+            (
+                v
+                for v in (ticker, ticker.replace("-", "."), ticker.replace(".", "-"))
+                if v in available
+            ),
+            None,
+        )
+        if key is None:
+            raise ValueError(f"{ticker} is missing from the saved run’s price history.")
+        keys[ticker] = key
+    if len(set(keys.values())) != len(keys):
+        raise ValueError("Each ticker in a basket must identify a different security.")
     # Preserve the original snapshot wherever possible. Prepend matching Finviz history for indicator warm-up.
     hist = {d: dict(prices) for d, prices in history.items() if d <= expected[-1]}
     if manager.finviz and meta.get("price_source", "finviz") == "finviz":
-        for sym in dict.fromkeys((key, "SPY")):
+        for sym in dict.fromkeys([*keys.values(), "SPY"]):
             path = manager.finviz.cache_dir / (sym + ".csv")
             if not sm.regular_file(path, manager.finviz.cache_dir):
                 continue
@@ -125,18 +139,18 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end):
             window = [d for d in expected if d < earliest and d in archive]
             for d in prior + window:
                 hist.setdefault(d, {})[sym] = archive[d]
-    if any(
-        not all(
-            isinstance(hist.get(d, {}).get(key, {}).get(k), (int, float))
-            and math.isfinite(hist[d][key][k])
-            and hist[d][key][k] > 0
-            for k in ("o", "c")
-        )
-        for d in expected
-    ):
-        raise ValueError(
-            "The selected symbol lacks a valid daily open or close for at least one session in the interval."
-        )
+    for ticker, key in keys.items():
+        for day in expected:
+            bar = hist.get(day, {}).get(key, {})
+            if any(
+                not isinstance(bar.get(k), (int, float))
+                or not math.isfinite(bar[k])
+                or bar[k] <= 0
+                for k in ("o", "c")
+            ):
+                raise ValueError(
+                    f"{ticker} lacks a daily open or close on {day}. Choose a shorter range or remove this ticker."
+                )
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp)
         folder.chmod(0o755)
@@ -145,7 +159,9 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end):
             json.dumps(
                 {
                     "history": hist,
-                    "tickers": json.loads(cache.read_text()).get("tickers", []),
+                    "tickers": tickers
+                    if tickers is not None
+                    else json.loads(cache.read_text()).get("tickers", []),
                 }
             )
         )
@@ -155,10 +171,20 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end):
         )
     if days != set(expected):
         raise ValueError("The replay did not evaluate every selected session.")
-    return [
-        dict(day=d, open=hist[d][key]["o"], close=hist[d][key]["c"], signal=d in buys)
-        for d in expected
-    ], version
+    by_symbol = {symbols[0]: buys} if isinstance(symbol, str) else buys
+    series = {
+        ticker: [
+            dict(
+                day=d,
+                open=hist[d][key]["o"],
+                close=hist[d][key]["c"],
+                signal=d in by_symbol[ticker],
+            )
+            for d in expected
+        ]
+        for ticker, key in keys.items()
+    }
+    return (series[symbol] if isinstance(symbol, str) else series), version
 
 
 def dataset(
@@ -172,10 +198,17 @@ def dataset(
     sessions=None,
     interval=None,
 ):
-    if not sm.RESULT_RE.fullmatch(rid) or not re.fullmatch(
-        r"[A-Z0-9][A-Z0-9.\-]{0,14}", symbol
+    symbols = [symbol] if isinstance(symbol, str) else symbol
+    if (
+        not sm.RESULT_RE.fullmatch(rid)
+        or not symbols
+        or any(not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", s) for s in symbols)
     ):
-        raise ValueError("Select a saved run and a valid symbol.")
+        raise ValueError("Select a saved run and valid symbols.")
+    if not isinstance(symbol, str) and (not interval or len(symbols) < 2):
+        raise ValueError(
+            "Select at least two distinct symbols and a historical date range."
+        )
     if (
         not 1 <= len(holds) <= 10
         or any(not 1 <= h <= 252 for h in holds)
@@ -196,18 +229,28 @@ def dataset(
     ):
         raise ValueError("Choose a completed strategy run with daily closing prices.")
     version = meta.get("strategy_sha256")
-    history = json.loads(cache.read_text())["history"]
+    snapshot = json.loads(cache.read_text())
+    history = snapshot["history"]
     if interval is not None:
         bars, version = calendar_replay(
-            manager, meta, cache, history, symbol, *interval
+            manager,
+            meta,
+            cache,
+            history,
+            symbol,
+            *interval,
+            tickers=snapshot.get("tickers", []),
         )
+        payload = dict(bars=bars) if isinstance(symbol, str) else dict(series=bars)
         return dict(
+            **payload,
             strategy=meta["strategy"],
             version=version,
             run=rid,
-            symbol=symbol,
-            bars=bars,
-            observed_days=len(bars),
+            symbol=symbol if isinstance(symbol, str) else f"{len(symbols)} symbols",
+            observed_days=len(bars)
+            if isinstance(symbol, str)
+            else len(bars[symbols[0]]),
             holds=holds,
             fee_bps=fee,
             source="Historical date-range replay",

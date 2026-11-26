@@ -259,7 +259,7 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         for t in fills:
             rows.append(
                 [
-                    info["symbol"],
+                    t.get("symbol", info["symbol"]),
                     "Long",
                     t["entry"],
                     fmt(t["buy"], "usd"),

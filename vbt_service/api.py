@@ -1,6 +1,7 @@
 import os
 import secrets
 from contextlib import asynccontextmanager
+from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -15,16 +16,26 @@ class Bar(BaseModel):
     signal: bool
 
 
-class Research(BaseModel):
+class Replay(BaseModel):
     run: str = Field(max_length=200)
     strategy: str = Field(max_length=150)
     version: str = Field(max_length=64)
     symbol: str = Field(max_length=15)
-    bars: list[Bar] = Field(min_length=4, max_length=3000)
     holds: list[int] = Field(min_length=1, max_length=10)
     fee_bps: FiniteFloat = Field(ge=0, le=100)
     source: str = Field(default="Archived signals", max_length=64)
     observed_days: int = Field(ge=1, le=3000)
+
+
+class Research(Replay):
+    bars: list[Bar] = Field(min_length=4, max_length=3000)
+
+
+class BasketResearch(Replay):
+    series: dict[
+        Annotated[str, Field(pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")],
+        Annotated[list[Bar], Field(min_length=4, max_length=252)],
+    ] = Field(min_length=2, max_length=5000)
 
 
 class Cohort(BaseModel):
@@ -68,8 +79,11 @@ def health():
 
 
 @app.post("/jobs", dependencies=[Depends(authorized)], status_code=202)
-def submit(data: Research | Cohort):
-    return jobs.submit(uuid4(), data.model_dump())
+def submit(data: Research | BasketResearch | Cohort):
+    request = data.model_dump()
+    if isinstance(data, BasketResearch):
+        request["symbols"] = list(data.series)
+    return jobs.submit(uuid4(), request)
 
 
 @app.get("/jobs", dependencies=[Depends(authorized)])
@@ -94,7 +108,7 @@ def history():
 def latest_backtest(run: str):
     with jobs.database() as db:
         row = db.execute(
-            """SELECT id, request-'bars', result FROM vbt_research
+            """SELECT id, request-'bars'-'series', result FROM vbt_research
                WHERE request->>'run' = %s AND result IS NOT NULL AND error IS NULL
                ORDER BY created DESC, id DESC LIMIT 1""",
             (run,),

@@ -175,5 +175,25 @@ class WorkspaceFlow(unittest.TestCase):
                 page.get_by_role("button", name="Run Backtest").click()
                 page.wait_for_load_state("networkidle")
                 self.assertEqual(set(submitted[-1]["prices"]), {"ABC", "XYZ"})
+            for selection in ("ABC,XYZ", "ALL"):
+                page.locator(".vb-picker summary").click()
+                page.get_by_label("Symbols", exact=True).fill(selection)
+                page.locator(".vb-picker summary").click()
+                page.locator(".vb-dates summary").click()
+                page.get_by_label("Historical start").fill("2026-07-01")
+                page.get_by_label("Historical end").fill("2026-10-30")
+                page.locator(".vb-dates summary").click()
+                series = {s: submitted[0]["bars"] for s in ("ABC", "XYZ")}
+                with patch(
+                    "backtests.calendar_replay", return_value=(series, "fixture")
+                ) as replay:
+                    page.get_by_role("button", name="Run Backtest").click()
+                    page.wait_for_load_state("networkidle")
+                    self.assertEqual(page.get_by_role("alert").count(), 0)
+                    self.assertEqual(
+                        replay.call_args.args[-3:],
+                        (["ABC", "XYZ"], "2026-07-01", "2026-10-30"),
+                    )
+                    self.assertEqual(submitted[-1]["series"], series)
             self.assertFalse(errors)
             browser.close()

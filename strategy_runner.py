@@ -444,16 +444,21 @@ def run_script(mod, path: Path, info: dict, a, out: Path) -> int:
 
 
 def replay_daily(a) -> int:
-    """Evaluate a generic strategy on one fixed symbol, revealing daily history incrementally."""
+    """Evaluate a generic strategy on a fixed symbol list, revealing daily history incrementally."""
     path = Path(a.strategy)
     cache = json.loads(Path(a.cache).read_text())
     if cache.get("timeframes"):
-        raise ValueError("Historical replay currently requires a strategy using daily prices only.")
+        raise ValueError(
+            "Historical replay currently requires a strategy using daily prices only."
+        )
     history = cache["history"]
-    sym = v5.cache_symbol(a.symbol, set(cache.get("tickers", [])) | {s for d in history.values() for s in d})
-    dates = [d for d in sorted(history) if d <= a.asof and sym in history[d]]
-    dates = set(dates[-a.sessions:])
-    buys, past = [], {}
+    symbols = a.symbol.split(",")
+    universe = {s for prices in history.values() for s in prices}
+    keys = {v5.cache_symbol(symbol, universe) for symbol in symbols}
+    dates = [d for d in sorted(history) if d <= a.asof and keys.issubset(history[d])]
+    dates = set(dates[-a.sessions :])
+    buys = {symbol: [] for symbol in symbols}
+    past = {}
     for day in sorted(history):
         if day > a.asof:
             break
@@ -464,18 +469,26 @@ def replay_daily(a) -> int:
         if a.candle_label and isinstance(getattr(mod, "CANDLE_DAYS", None), int):
             mod.CANDLE_DAYS = 1
             mod.CANDLE_LABEL = a.candle_label
-        rows = mod.finviz_signals([a.symbol], day, {"tickers": cache.get("tickers", []), "history": past})
+        rows = mod.finviz_signals(
+            symbols.copy(), day, {"tickers": cache.get("tickers", []), "history": past}
+        )
         if not isinstance(rows, list):
             raise ValueError("The strategy did not return a signal list.")
-        for row in rows:
-            if str(row.get("Ticker","")).upper() == a.symbol and row.get("Status") in ("ERROR","NOT IN PRICE CACHE"):
-                raise ValueError(f"Strategy could not evaluate {a.symbol} on {day}: {row.get('Error') or row['Status']}")
         has_status = any("Status" in row for row in rows)
-        if any(str(row.get("Ticker","")).upper() == a.symbol and
-               (not has_status or str(row.get("Status","")).strip() in {"BUY", "BUY SIGNAL", "SIGNAL"})
-               for row in rows):
-            buys.append(day)
-    Path(a.output).write_text(json.dumps({"buys": buys, "days": sorted(dates)}))
+        for row in rows:
+            symbol = str(row.get("Ticker", "")).upper()
+            if symbol not in buys:
+                continue
+            status = str(row.get("Status", "")).strip().upper()
+            if status in {"ERROR", "NOT IN PRICE CACHE"}:
+                raise ValueError(
+                    f"Strategy could not evaluate {symbol} on {day}: {row.get('Error') or status}"
+                )
+            if not has_status or status in {"BUY", "BUY SIGNAL", "SIGNAL"}:
+                if not buys[symbol] or buys[symbol][-1] != day:
+                    buys[symbol].append(day)
+    signals = buys if len(symbols) > 1 else buys[symbols[0]]
+    Path(a.output).write_text(json.dumps({"buys": signals, "days": sorted(dates)}))
     return 0
 
 

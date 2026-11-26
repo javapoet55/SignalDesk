@@ -1,4 +1,4 @@
-"""Backtest one symbol using saved, point-in-time Finviz signals."""
+"""Backtest daily Finviz signals with equal starting capital per selected symbol."""
 
 import math
 from datetime import date
@@ -7,49 +7,61 @@ import pandas as pd
 import vectorbtpro as vbt
 
 
-def simulate(bars, hold, fee_bps, detail=False):
-    index = pd.DatetimeIndex([b["day"] for b in bars])
-    opens = pd.Series([b["open"] for b in bars], index=index)
-    closes = pd.Series([b["close"] for b in bars], index=index)
-    entries = pd.Series(False, index=index)
+def simulate(series, start, end, hold, fee_bps, detail=False):
+    window = {symbol: bars[start:end] for symbol, bars in series.items()}
+    days = [bar["day"] for bar in next(iter(window.values()))]
+    index = pd.DatetimeIndex(days)
+    opens = pd.DataFrame(
+        {s: [b["open"] for b in bars] for s, bars in window.items()}, index=index
+    )
+    closes = pd.DataFrame(
+        {s: [b["close"] for b in bars] for s, bars in window.items()}, index=index
+    )
+    entries = pd.DataFrame(False, index=index, columns=opens.columns)
     exits = entries.copy()
-    available = 1
-    for i in range(1, len(bars)):
-        if i >= available and bars[i - 1]["signal"] and i + hold < len(bars):
-            entries.iloc[i] = exits.iloc[i + hold] = True
-            available = i + hold + 1
+    for column, bars in enumerate(window.values()):
+        available = 1
+        for i in range(1, len(bars) - hold):
+            if i >= available and bars[i - 1]["signal"]:
+                entries.iat[i, column] = exits.iat[i + hold, column] = True
+                available = i + hold + 1
     pf = vbt.Portfolio.from_signals(
         closes,
         entries=entries,
         exits=exits,
         price=opens,
         fees=fee_bps / 10000,
-        init_cash=100000,
+        init_cash=100000 / len(window),
+        cash_sharing=False,
         freq="1D",
     )
-    equity = pf.value
+    equity = pf.value.sum(axis=1)
+    peaks = equity.cummax().clip(lower=100000)
+    records = pf.trades.records
     result = {
         "hold": hold,
-        "trades": int(entries.sum()),
-        "return_pct": float(pf.total_return) * 100,
-        "drawdown_pct": abs(float(pf.max_drawdown)) * 100,
+        "trades": len(records),
+        "return_pct": float(equity.iloc[-1] / 100000 - 1) * 100,
+        "drawdown_pct": float((1 - equity / peaks).max()) * 100,
         "equity": [round(float(x), 2) for x in equity],
     }
-
     if detail:
         result["fills"] = [
             dict(
-                entry=bars[t["entry_idx"]]["day"],
-                exit=bars[t["exit_idx"]]["day"],
+                symbol=opens.columns[t["col"]],
+                entry=days[t["entry_idx"]],
+                exit=days[t["exit_idx"]],
                 buy=t["entry_price"],
                 sell=t["exit_price"],
                 pnl=t["pnl"],
                 pct=t["return"] * 100,
                 hold=t["exit_idx"] - t["entry_idx"],
             )
-            for t in pf.trades.records.to_dict("records")
+            for t in records.sort_values(["entry_idx", "col"]).to_dict("records")
         ]
-        result["benchmark"] = [100000 * b["close"] / bars[0]["close"] for b in bars]
+        result["benchmark"] = (
+            closes.div(closes.iloc[0]).mean(axis=1) * 100000
+        ).tolist()
     return result
 
 
@@ -93,7 +105,9 @@ def cohort_returns(data):
 def calculate(data):
     if "prices" in data:
         return cohort_returns(data)
-    bars, holds, fee = data["bars"], data["holds"], data["fee_bps"]
+    series = data.get("series") or {data.get("symbol", ""): data["bars"]}
+    bars = next(iter(series.values()))
+    holds, fee = data["holds"], data["fee_bps"]
     if not 4 <= len(bars) <= 3000 or not 1 <= len(holds) <= 10:
         raise ValueError("Supply 4–3000 daily bars and 1–10 holding periods.")
     if (
@@ -105,14 +119,18 @@ def calculate(data):
             "Holding periods must be 1–252 sessions and fees 0–100 basis points."
         )
     days = [date.fromisoformat(b["day"]) for b in bars]
+    calendar = [b["day"] for b in bars]
+    if any([b["day"] for b in items] != calendar for items in series.values()):
+        raise ValueError("All symbols must cover the same sessions.")
     if days != sorted(set(days)) or any(
         type(b["signal"]) is not bool
         or any(not math.isfinite(b[k]) or b[k] <= 0 for k in ("open", "close"))
-        for b in bars
+        for items in series.values()
+        for b in items
     ):
         raise ValueError("Daily bars must be unique, ordered and have positive prices.")
     split = int(len(bars) * 0.7)
-    trained = [simulate(bars[:split], h, fee) for h in dict.fromkeys(holds)]
+    trained = [simulate(series, 0, split, h, fee) for h in dict.fromkeys(holds)]
     candidates = [r for r in trained if r["trades"]]
     best = max(candidates, key=lambda r: r["return_pct"]) if candidates else None
     folds = []
@@ -123,11 +141,11 @@ def calculate(data):
         train = (
             trained
             if start == split
-            else [simulate(bars[:start], h, fee) for h in dict.fromkeys(holds)]
+            else [simulate(series, 0, start, h, fee) for h in dict.fromkeys(holds)]
         )
         valid = [p for p in train if p["trades"]]
         winner = max(valid, key=lambda p: p["return_pct"]) if valid else None
-        scores = simulate(bars[start:end], winner["hold"], fee) if winner else {}
+        scores = simulate(series, start, end, winner["hold"], fee) if winner else {}
         folds.append(
             dict(
                 start=bars[start]["day"],
@@ -143,8 +161,10 @@ def calculate(data):
         "days": [b["day"] for b in bars],
         "parameters": [{k: v for k, v in r.items() if k != "equity"} for r in trained],
         "validation_start": bars[split]["day"],
-        "validation": simulate(bars[split:], best["hold"], fee) if best else None,
+        "validation": simulate(series, split, len(bars), best["hold"], fee)
+        if best
+        else None,
         "full_period": simulate(
-            bars, best["hold"] if best else holds[0], fee, detail=True
+            series, 0, len(bars), best["hold"] if best else holds[0], fee, detail=True
         ),
     }
