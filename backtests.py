@@ -6,6 +6,7 @@ import math
 import hashlib
 import tempfile
 import threading
+import time
 import os
 import re
 import urllib.request
@@ -340,6 +341,11 @@ def dataset(
         fee_bps=fee,
         source="Archived signals",
     )
+
+
+def submit_job(data, started):
+    data["preparation_seconds"] = time.monotonic() - started
+    return service("/jobs", data)["id"]
 
 
 def service(path, data=None):

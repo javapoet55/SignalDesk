@@ -3266,12 +3266,13 @@ class Handler(BaseHTTPRequestHandler):
                             "commission": str(float(form.get("fee", "0")) / 100), "start": start, "end": end,
                         }, signal_tickers)
                         return self._redirect("/vectorbt?job=" + job_id)
+                    started = time.monotonic()
                     data = backtests.dataset(st.results_dir, form.get("rid", ""), form.get("symbol", "").upper().strip(),
                         [int(h.strip()) for h in form.get("holds", "").split(",")], float(form.get("fee", "0")), signal_tickers, st,
                         int(form.get("sessions", "60")) if form.get("source") == "replay" else None,
                         interval=(form.get("historical_start",""),form.get("historical_end","")) if form.get("source") == "range" else None)
-                    job = backtests.service("/jobs", data)
-                    return self._redirect("/vectorbt?job=" + job["id"])
+                    job_id = backtests.submit_job(data, started)
+                    return self._redirect("/vectorbt?job=" + job_id)
                 if path == "/strategies/go":
                     message, anchor = self._go(picked, form, multi.get("time", [])), "#activity"
                 elif path == "/strategies/autoset":

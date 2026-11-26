@@ -18,6 +18,7 @@ def initialize():
         db.execute("""CREATE TABLE IF NOT EXISTS vbt_research (
             id uuid PRIMARY KEY, request jsonb NOT NULL, result jsonb, error text,
             created timestamptz NOT NULL DEFAULT now())""")
+        db.execute("ALTER TABLE vbt_research ADD COLUMN IF NOT EXISTS elapsed_seconds double precision")
 
 
 def wake():
@@ -43,10 +44,10 @@ def submit(key, data):
 def lookup(key: UUID):
     with database() as db:
         row = db.execute(
-            "SELECT request-'bars'-'series', result, error FROM vbt_research WHERE id=%s",
+            "SELECT request-'bars'-'series', result, error, elapsed_seconds FROM vbt_research WHERE id=%s",
             (key,),
         ).fetchone()
-        return dict(inputs=row[0], result=row[1], error=row[2]) if row else None
+        return dict(inputs=row[0], result=row[1], error=row[2], elapsed_seconds=row[3]) if row else None
 
 
 def work():
@@ -58,18 +59,19 @@ def work():
             row = db.execute("""SELECT id, request FROM vbt_research WHERE result IS NULL AND error IS NULL
                               ORDER BY created LIMIT 1 FOR UPDATE SKIP LOCKED""").fetchone()
             if row:
+                key, request = row
+                result, error = None, None
                 try:
-                    result = calculate(row[1])
+                    result = Jsonb(calculate(request))
                 except Exception as exc:
-                    db.execute(
-                        "UPDATE vbt_research SET error=%s WHERE id=%s",
-                        (str(exc)[:300], row[0]),
-                    )
-                else:
-                    db.execute(
-                        "UPDATE vbt_research SET result=%s WHERE id=%s",
-                        (Jsonb(result), row[0]),
-                    )
+                    error = str(exc)[:300]
+                # The transaction starts before calculate(). Use the clock at completion.
+                db.execute(
+                    """UPDATE vbt_research SET result=%s, error=%s,
+                       elapsed_seconds=%s + GREATEST(0, EXTRACT(EPOCH FROM clock_timestamp() - created))
+                       WHERE id=%s""",
+                    (result, error, request.get("preparation_seconds", 0), key),
+                )
                 continue
         try:
             wake().brpop("vbt:jobs", timeout=5)

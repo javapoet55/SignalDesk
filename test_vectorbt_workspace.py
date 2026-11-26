@@ -89,7 +89,7 @@ class WorkspaceFlow(unittest.TestCase):
                         "status": "Completed",
                     }
                 ]
-            return {"inputs": req, "result": result, "error": None}
+            return {"inputs": req, "result": result, "error": None, "elapsed_seconds": 30.1}
 
         with (
             patch.dict(
@@ -125,6 +125,10 @@ class WorkspaceFlow(unittest.TestCase):
             page.wait_for_url("**/vectorbt?job=*")
             self.assertEqual(submitted[0]["holds"], [5])
             self.assertEqual(submitted[0]["fee_bps"], 10)
+            self.assertGreaterEqual(submitted[0]["preparation_seconds"], 0)
+            timing_row = page.locator("dl > div:has(> dt:text-is('Engine')) + div")
+            self.assertEqual(timing_row.locator("dt").inner_text(), "Time taken")
+            self.assertEqual(timing_row.locator("dd").inner_text(), "30 seconds")
             for group, title in (("all", "total"), ("wins", "winning"), ("losses", "losing")):
                 with page.expect_popup() as opened:
                     page.get_by_role("link", name=f"View {title} trades as text").click()

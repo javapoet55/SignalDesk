@@ -16,13 +16,17 @@ class Bar(BaseModel):
     signal: bool
 
 
-class Replay(BaseModel):
+class BacktestRequest(BaseModel):
     run: str = Field(max_length=200)
     strategy: str = Field(max_length=150)
     version: str = Field(max_length=64)
     symbol: str = Field(max_length=15)
     holds: list[int] = Field(min_length=1, max_length=10)
     fee_bps: FiniteFloat = Field(ge=0, le=100)
+    preparation_seconds: FiniteFloat = Field(default=0, ge=0)
+
+
+class Replay(BacktestRequest):
     source: str = Field(default="Archived signals", max_length=64)
     observed_days: int = Field(ge=1, le=3000)
 
@@ -38,11 +42,7 @@ class BasketResearch(Replay):
     ] = Field(min_length=2, max_length=5000)
 
 
-class Cohort(BaseModel):
-    run: str = Field(max_length=200)
-    strategy: str = Field(max_length=150)
-    version: str = Field(max_length=64)
-    symbol: str = Field(max_length=15)
+class Cohort(BacktestRequest):
     source: str
     close_marks: dict[str, FiniteFloat | None] = Field(
         default_factory=dict, max_length=253
@@ -50,8 +50,6 @@ class Cohort(BaseModel):
     signal_day: str
     dates: list[str] = Field(min_length=2, max_length=11)
     elapsed: list[bool] = Field(min_length=2, max_length=11)
-    holds: list[int] = Field(min_length=1, max_length=10)
-    fee_bps: FiniteFloat = Field(ge=0, le=100)
     prices: dict[str, list[FiniteFloat | None]] = Field(min_length=1, max_length=5000)
 
 
@@ -108,12 +106,12 @@ def history():
 def latest_backtest(run: str):
     with jobs.database() as db:
         row = db.execute(
-            """SELECT id, request-'bars'-'series', result FROM vbt_research
+            """SELECT id, request-'bars'-'series', result, elapsed_seconds FROM vbt_research
                WHERE request->>'run' = %s AND result IS NOT NULL AND error IS NULL
                ORDER BY created DESC, id DESC LIMIT 1""",
             (run,),
         ).fetchone()
-    return {"id": str(row[0]), "inputs": row[1], "result": row[2], "error": None} if row else None
+    return {"id": str(row[0]), "inputs": row[1], "result": row[2], "error": None, "elapsed_seconds": row[3]} if row else None
 
 
 @app.get("/jobs/{key}", dependencies=[Depends(authorized)])

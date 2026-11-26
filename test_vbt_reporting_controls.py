@@ -3,7 +3,19 @@ import unittest
 from unittest.mock import patch
 
 import dow_benchmark
-from vectorbt_workspace import report_data, trade_text
+from vectorbt_workspace import report_data, time_taken, trade_text
+
+
+class BacktestDuration(unittest.TestCase):
+    def test_finished_pending_and_legacy_runs(self):
+        for elapsed, label in ((0.1, "Less than 1 second"), (1, "1 second"),
+                               (29.8, "30 seconds"), (59.8, "1 minute"), (121, "2 minutes 1 second")):
+            with self.subTest(elapsed=elapsed):
+                self.assertEqual(time_taken({"elapsed_seconds": elapsed}), label)
+        self.assertEqual(time_taken(None), "—")
+        self.assertEqual(time_taken({"result": None, "error": None}), "In progress")
+        self.assertEqual(time_taken({"result": {"engine": "older"}}), "Not recorded")
+        self.assertEqual(time_taken({"error": "failed"}), "Not recorded")
 
 
 class DowBenchmark(unittest.TestCase):

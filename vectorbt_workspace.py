@@ -3,6 +3,7 @@
 import csv
 import io
 import re
+import time
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -46,6 +47,7 @@ def eligible(st):
 
 
 def submit(st, fields, buys):
+    started = time.monotonic()
     rid = fields.get("rid", "")
     fee = (
         float(fields.get("commission", "0")) * 100
@@ -96,11 +98,24 @@ def submit(st, fields, buys):
             st,
             interval=(start, end) if start else None,
         )
-    return backtests.service("/jobs", data)["id"]
+    return backtests.submit_job(data, started)
 
 
 def report_data(job, hold):
     return result_html(job, "", hold, metrics_only=True) if job else {}
+
+
+def time_taken(job):
+    if not job:
+        return "—"
+    seconds = job.get("elapsed_seconds")
+    if seconds is None:
+        return "In progress" if job.get("result") is None and job.get("error") is None else "Not recorded"
+    if seconds < 1:
+        return "Less than 1 second"
+    minutes, seconds = divmod(round(seconds), 60)
+    units = [(minutes, "minute"), (seconds, "second")]
+    return " ".join(f"{n} {unit}{'s' if n != 1 else ''}" for n, unit in units if n)
 
 
 def stats(m):
@@ -378,6 +393,7 @@ def report(job, key, m, window):
                 "Engine",
                 "VectorBT PRO " + str(job["result"]["engine"]) if m else "VectorBT PRO",
             ),
+            ("Time taken", time_taken(job)),
         ]
     )
     if not job:
