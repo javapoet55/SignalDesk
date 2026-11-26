@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import backtests
 import dow_benchmark
 import strategies as sm
-from backtest_dashboard import CAPITAL, fmt, result_html, target_rule, warmup_note
+from backtest_dashboard import CAPITAL, entry_label, fmt, result_html, target_rule, warmup_note
 from backtest_dashboard import e as esc
 from strategy_design import icon
 
@@ -158,7 +158,7 @@ def export(kind, info, m):
             esc(info["strategy"]) + " · " + esc(info["symbol"]), styles["Heading2"]
         ),
         Paragraph(
-            f"{esc(m['start'])} through {esc(m['end'])} · {'Up to ' if info.get('exit_on_target') else ''}{m['hold']} sessions · "
+            f"{entry_label(info)} entry · {esc(m['start'])} through {esc(m['end'])} · {'Up to ' if info.get('exit_on_target') else ''}{m['hold']} sessions · "
             f"{info['fee_bps']:g} bps per side" + (f" · Profit target {info['profit_target_pct']:g}%" if info.get("profit_target_pct") else ""),
             styles["BodyText"],
         ),
@@ -382,7 +382,7 @@ def report(job, key, m, window):
         "Profit factor": "Total gains on profitable trades divided by the absolute total losses on losing trades, after fees.",
         "Expectancy": "Total net P/L divided by the number of closed trades. This is the average dollar gain or loss per trade.",
         "Average hold (sessions)": ("Average number of trading days from entry through exit, counting the entry day."
-                                    if info.get("exit_on_target") else "Average number of trading sessions between entry and exit."),
+                                    if info.get("exit_on_target") and info.get("entry_basis") != "signal_close" else "Average number of trading sessions between entry and exit."),
     }
     explanations["Average win"] = explanations["Average positive P/L"]
     explanations["Average loss"] = explanations["Average negative P/L"]
@@ -403,6 +403,7 @@ def report(job, key, m, window):
             ("Strategy", info.get("strategy", "—")),
             ("Symbols", basket_label or symbol),
             ("Price bars", "Daily"),
+            ("Entry price", entry_label(info) if info else "Signal-day close"),
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
             ("Profit target", f"{info['profit_target_pct']:g}%" if info.get("profit_target_pct") else "—"),
@@ -431,13 +432,14 @@ def report(job, key, m, window):
         status += ". Starting capital is split equally across the selected tickers. The ticker list is fixed for the entire replay."
     if info.get("warmup_sessions"):
         status += " " + warmup_note(info)
+    if info.get("entry_basis") == "signal_close":
+        status += " Entries assume a fill at the closing price used to calculate the daily signal."
     if m.get("profit_target_pct"):
         status += " " + target_rule(info)
-        open_count = job["result"].get("full_period", {}).get("open_trades", 0)
-        if open_count:
-            status += f" {open_count} open at period end, valued at the last close."
         if m["unscored"]:
             status += f" Incomplete daily highs left {m['unscored']} closed trades unscored."
+    if m and (open_count := job["result"].get("full_period", {}).get("open_trades", 0)):
+        status += f" {open_count} open at period end, valued at the last close."
     actions = ""
     if m:
         for title, kind in (
@@ -516,7 +518,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "<label>Initial Capital<input readonly value='$100,000'></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
-        "title='Sell on the first target touch or at the seventh trading day’s close. Leave blank for a fixed holding period.'></label>"
+        "title='Buy at the signal close. Sell on the first target touch during the next seven trading days, or at the seventh close.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"

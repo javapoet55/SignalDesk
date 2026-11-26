@@ -12,7 +12,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backtest_dashboard import CSS, result_html, target_rule, warmup_note
+from backtest_dashboard import CSS, entry_label, result_html, target_rule, warmup_note
 
 MODES = (
     "Explain results",
@@ -38,7 +38,10 @@ def evidence(job, choice):
     )
     add(
         "Execution assumptions",
-        f"Long-only simulation with entries at the daily open and {info['fee_bps']:g} basis points of fees per side. The model does not estimate bid–ask spread or market impact.",
+        f"Long-only simulation. Entry pricing: {entry_label(info)}. Fees are {info['fee_bps']:g} basis points per side. "
+        "The model does not estimate bid–ask spread or market impact."
+        + (" The simulation assumes a fill at the same closing price used to calculate the daily signal."
+           if info.get("entry_basis") == "signal_close" else ""),
     )
     if "outcomes" in result:
         hold = next(

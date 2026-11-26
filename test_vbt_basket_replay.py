@@ -194,6 +194,90 @@ class PortfolioCalculation(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "TIME.*daily high unavailable"):
             calculate(data)
 
+    def test_signal_close_is_the_entry_and_target_window_starts_next_session(self):
+        try:
+            from vbt_service.engine import calculate
+        except ModuleNotFoundError as exc:
+            if exc.name == "vectorbtpro":
+                self.skipTest("Licensed VectorBT PRO runtime required")
+            raise
+        from vectorbt_workspace import report_data
+
+        days = [f"2026-10-{d:02d}" for d in (1, 2, 5, 6, 7, 8, 9, 12, 13, 14)]
+
+        def bars():
+            return [
+                dict(
+                    day=d,
+                    open=95,
+                    high=120 if i == 0 else 101,
+                    close=100,
+                    signal=i == 0,
+                )
+                for i, d in enumerate(days)
+            ]
+
+        series = {s: bars() for s in ("HIT", "GAP", "TIME", "LAST")}
+        series["HIT"][2]["high"] = 102
+        series["GAP"][1].update(open=105, high=110)
+        series["TIME"][7].update(close=97)
+        series["LAST"][0]["signal"] = False
+        series["LAST"][-1].update(signal=True, high=400)
+        data = dict(
+            series=series,
+            strategy="scanner",
+            run="sample",
+            symbol="4 symbols",
+            holds=[7],
+            fee_bps=0,
+            profit_target_pct=2,
+            exit_on_target=True,
+            entry_basis="signal_close",
+        )
+        full = calculate(data)["full_period"]
+        self.assertEqual(
+            [
+                (f["symbol"], f["entry"], f["buy"], f["exit"], f["sell"], f["hold"])
+                for f in full["fills"]
+            ],
+            [
+                ("HIT", days[0], 100, days[2], 102, 2),
+                ("GAP", days[0], 100, days[1], 105, 1),
+                ("TIME", days[0], 100, days[7], 97, 7),
+            ],
+        )
+        self.assertEqual((full["open_trades"], full["equity"][-1]), (1, 101000))
+        self.assertEqual(full["equity"][0], 100000)
+        fixed = calculate(
+            dict(data, exit_on_target=False, profit_target_pct=None, holds=[1])
+        )["full_period"]
+        self.assertEqual(
+            [(f["entry"], f["buy"], f["exit"], f["sell"]) for f in fixed["fills"]],
+            [(days[0], 100, days[1], val) for val in (95, 105, 95)],
+        )
+        symbols = ("HIT", "GAP", "TIME")
+        cohort = dict(
+            data,
+            symbol="3 buys",
+            signal_day=days[0],
+            dates=[days[0], days[7]],
+            elapsed=[True, True],
+            prices={s: [100, 95] for s in symbols},
+            target_days=days[1:8],
+            completed_sessions=7,
+            target_bars={s: series[s][1:8] for s in symbols},
+        )
+        result = calculate(cohort)
+        self.assertEqual(result["days"], days[:8])
+        self.assertAlmostEqual(result["equity"][-1], 100000 * 3.04 / 3, places=2)
+        rows = report_data(dict(inputs=cohort, result=result, error=None), "")["rows"]
+        self.assertTrue(all(row[2] == days[0] and row[3] == "$100.00" for row in rows))
+        for f in full["fills"]:
+            self.assertEqual(
+                result["target_fills"][f["symbol"]],
+                {k: f[k] for k in ("exit", "sell", "hold")},
+            )
+
     def test_profit_target_touch_within_open_to_open_hold(self):
         try:
             from vbt_service.engine import calculate

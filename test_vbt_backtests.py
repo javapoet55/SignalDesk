@@ -62,9 +62,9 @@ class HistoricalSignals(unittest.TestCase):
             )
             output = dataset(root, rid, "ABC", [1, 2], 0, lambda folder: ["ABC"])
             self.assertEqual(
-                [b["day"] for b in output["bars"] if b["signal"]], ["2026-11-02"]
+                [b["day"] for b in output["bars"] if b["signal"]], ["2026-11-02", "2026-11-06"]
             )
-            self.assertEqual(output["observed_days"], 1)
+            self.assertEqual(output["observed_days"], 2)
 
     def test_python_replay_only_sees_bars_through_each_date(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,7 +104,7 @@ class HistoricalSignals(unittest.TestCase):
 
 
 class BatchSignals(unittest.TestCase):
-    def test_entire_buy_list_waits_for_next_exchange_open(self):
+    def test_entire_buy_list_enters_at_asof_close_before_holiday(self):
         import datetime as dt
         from backtests import cohort
 
@@ -135,9 +135,11 @@ class BatchSignals(unittest.TestCase):
                 lambda _: [f"S{i}" for i in range(125)],
                 now=dt.datetime.fromisoformat("2026-11-26T07:30:00+00:00"),
             )
-            self.assertEqual(request["dates"][:2], ["2026-11-27", "2026-11-30"])
+            self.assertEqual(request["dates"][:2], ["2026-11-25", "2026-11-27"])
             self.assertEqual(len(request["prices"]), 125)
-            self.assertFalse(any(request["elapsed"]))
+            self.assertEqual(request["elapsed"], [True, False, False, False])
+            (folder / "history_cache.json").write_text(json.dumps(
+                {"history": {"2026-11-25": {"ABC": {"o": 305, "h": 320, "c": 298}}}}))
             (root / "ABC.csv").write_text(
                 "Date,Open,High,Low,Close\n"
                 "2026-11-27,300,302,299,301\n"
@@ -149,7 +151,7 @@ class BatchSignals(unittest.TestCase):
                 now=dt.datetime.fromisoformat("2026-12-01T15:00:00+00:00"), target=2,
             )
             self.assertEqual(snapshot["holds"], [7])
-            self.assertEqual(snapshot["prices"]["ABC"], [300, None])
+            self.assertEqual(snapshot["prices"]["ABC"], [298, None])
             self.assertEqual(snapshot["completed_sessions"], 2)
             self.assertEqual(snapshot["target_days"][-1], "2026-12-07")
             self.assertEqual(snapshot["target_bars"]["ABC"], [

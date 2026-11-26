@@ -115,8 +115,8 @@ def target_exit(bar, limit, age, complete=True):
     return None
 
 
-def simulate_target(series, start, end, hold, fee_bps, detail=False, *, target):
-    # Two execution slots let VectorBT buy at the open and sell on the same daily bar.
+def simulate_orders(series, start, end, hold, fee_bps, detail=False, *, target, signal_close):
+    # Separate earlier execution from the final close so the daily high precedes a close entry.
     symbols = list(series)
     days = [b["day"] for b in series[symbols[0]][start:end]]
     shape = (len(days) * 2, len(symbols))
@@ -130,25 +130,33 @@ def simulate_target(series, start, end, hold, fee_bps, detail=False, *, target):
         for i, bar in enumerate(bars):
             morning = 2 * i
             marks[morning : morning + 2, col] = bar["open"], bar["close"]
-            if entry is None and i and bars[i - 1]["signal"]:
+            if not signal_close and entry is None and i and bars[i - 1]["signal"]:
                 entry = i
                 limit = limit_price(bar["open"], target)
                 sizes[morning, col], prices[morning, col] = np.inf, bar["open"]
             if entry is not None:
-                try:
-                    fill = target_exit(bar, limit, i - entry + 1)
-                except ValueError as exc:
-                    raise ValueError(
-                        f"{symbol} on {days[i]}: {exc}. A target exit cannot be priced."
-                    ) from exc
+                age = i - entry + int(not signal_close)
+                if target is None:
+                    fill = (bar["open"], None) if age == hold else None
+                else:
+                    try:
+                        fill = target_exit(bar, limit, age)
+                    except ValueError as exc:
+                        raise ValueError(f"{symbol} on {days[i]}: {exc}. A target exit cannot be priced.") from exc
                 if fill is not None:
                     price, hit = fill
-                    slot = (
-                        morning if i > entry and bar["open"] >= limit else morning + 1
-                    )
+                    # A timed-out limit sells at the close. An intraday target can free capital
+                    # for a new close signal. Legacy open entries need separate same-day slots.
+                    at_close = hit is False or (not signal_close and entry == i)
+                    slot = morning + int(at_close)
                     sizes[slot, col], prices[slot, col] = -np.inf, price
                     closed[col, slot] = hit
                     entry = None
+            if signal_close and entry is None and bar["signal"] and np.isnan(sizes[morning + 1, col]):
+                entry = i
+                if target is not None:
+                    limit = limit_price(bar["close"], target)
+                sizes[morning + 1, col], prices[morning + 1, col] = np.inf, bar["close"]
     frame = pd.DataFrame(marks, columns=symbols)
     portfolio = vbt.Portfolio.from_orders(
         frame,
@@ -183,7 +191,7 @@ def simulate_target(series, start, end, hold, fee_bps, detail=False, *, target):
                     sell=trade["exit_price"],
                     pnl=trade["pnl"],
                     pct=trade["return"] * 100,
-                    hold=last - first + 1,
+                    hold=last - first + int(not signal_close),
                     target_hit=closed[trade["col"], trade["exit_idx"]],
                 )
             )
@@ -251,12 +259,16 @@ def target_cohort(data):
         if len(values) != len(prices):
             break
         equity.append(round(sum(values), 2))
+    mark_days = days[:len(equity)]
+    if data.get("entry_basis") == "signal_close" and all(v[0] is not None for v in prices.values()):
+        mark_days = [data["dates"][0], *mark_days]
+        equity.insert(0, round(100000 / (1 + fee), 2))
     return dict(
         engine=vbt.__version__,
         outcomes=outcomes,
         target_hits=hits,
         target_fills=fills,
-        days=days[: len(equity)],
+        days=mark_days,
         equity=equity,
     )
 
@@ -311,6 +323,7 @@ def cohort_returns(data):
 
 def calculate(data):
     target_mode = data.get("exit_on_target", False)
+    signal_close = data.get("entry_basis") == "signal_close"
     if target_mode and (not data.get("profit_target_pct") or data["holds"] != [TARGET_SESSIONS]):
         raise ValueError("Target exits require a positive profit target and a seven-session maximum.")
     if "prices" in data:
@@ -341,8 +354,10 @@ def calculate(data):
         raise ValueError("Daily bars must be unique, ordered and have positive prices.")
     split = int(len(bars) * 0.7)
     def run(start, end, hold, detail=False):
-        if target_mode:
-            return simulate_target(series, start, end, hold, fee, detail, target=data["profit_target_pct"])
+        if target_mode or signal_close:
+            return simulate_orders(series, start, end, hold, fee, detail,
+                                   target=data["profit_target_pct"] if target_mode else None,
+                                   signal_close=signal_close)
         return simulate(series, start, end, hold, fee, detail, target=data.get("profit_target_pct") if detail else None)
 
     trained = [run(0, split, h) for h in dict.fromkeys(holds)]

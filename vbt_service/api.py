@@ -1,7 +1,7 @@
 import os
 import secrets
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -25,6 +25,7 @@ class BacktestRequest(BaseModel):
     holds: list[int] = Field(min_length=1, max_length=10)
     fee_bps: FiniteFloat = Field(ge=0, le=100)
     preparation_seconds: FiniteFloat = Field(default=0, ge=0)
+    entry_basis: Literal["next_open", "signal_close"] = "next_open"
     exit_on_target: bool = False
     profit_target_pct: FiniteFloat | None = Field(default=None, gt=0)
 

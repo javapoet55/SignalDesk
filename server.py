@@ -2114,9 +2114,9 @@ def render_result(app: App, rid: str) -> Optional[str]:
                       if kind == "generic" else "") +
                    "<label>Holding periods (sessions) <input name='holds' value='1,5,10' required></label> "
                    "<label>Profit target (%) <input type='number' name='profit_target_pct' min='0' step='any' placeholder='Optional'></label> "
-                   f"<button>Run backtest</button>{batch_button}</form><p>Choose both dates to replay all buy tickers over that range. Leave dates blank to test the buys at the next session open.</p><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
+                   f"<button>Run backtest</button>{batch_button}</form><p>Choose both dates to replay all buy tickers over that range. Leave dates blank to test the buys at the saved signal day’s close.</p><p>Replay archived buy signals from matching strategy versions. Older unversioned runs are grouped by strategy name. "
                    "Python replay uses daily bars available through each evaluation date. "
-                   "Enter at the following open. A profit target sells on the first touch or at the seventh session’s close. Without a target, the selected holding periods apply. Days without a saved buy stay flat when out of position. "
+                   "Enter at the signal day’s close. Check the target over the following seven trading sessions and sell at the seventh close if it is missed. Without a target, exit at the open the selected number of sessions after entry. Days without a saved buy stay flat when out of position. "
                    "Compare holding periods on the first 70% of bars and validate the best on the final 30%. "
                    "Trade statistics count closed positions.</p></section>")
 

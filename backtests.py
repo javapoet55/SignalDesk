@@ -12,7 +12,6 @@ import os
 import re
 import urllib.request
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import strategies as sm
 from backtest_dashboard import result_html as result_html
@@ -348,9 +347,11 @@ def dataset(
             source="Historical Python replay",
             warmup_sessions=warmup_sessions,
         )
-    by_day = {bar["day"]: (bar, nxt) for bar, nxt in zip(bars, bars[1:])}
+    from paper_trading.market import exchange
+
+    cal = exchange()
+    by_day = {bar["day"]: bar for bar in bars}
     observed = set()
-    et = ZoneInfo("America/New_York")
     for other in root.iterdir():
         if other.is_symlink() or not sm.RESULT_RE.fullmatch(other.name):
             continue
@@ -365,10 +366,10 @@ def dataset(
             or run.get("candles", "1d") != "1d"
         ):
             continue
-        bar, nxt = by_day[day]
-        deadline = dt.datetime.fromisoformat(nxt["day"] + "T09:30:00").replace(
-            tzinfo=et
-        )
+        if not cal.is_session(day):
+            continue
+        bar = by_day[day]
+        deadline = cal.session_open(cal.next_session(day))
         stamp = run.get("finished_utc")
         if not stamp or dt.datetime.fromisoformat(stamp) >= deadline:
             continue
@@ -398,6 +399,7 @@ def dataset(
 
 
 def submit_job(data, started):
+    data["entry_basis"] = "signal_close"
     if data.get("profit_target_pct"):
         data["exit_on_target"] = True
         if "bars" in data and data.get("source") != "Historical date-range replay":
@@ -432,7 +434,7 @@ def service(path, data=None):
 
 
 def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
-    """Freeze the exact buy list, then look up observed opens on the required sessions."""
+    """Buy the saved signal basket at its as-of close and price exits on subsequent sessions."""
     import finviz_prices
     from paper_trading.market import exchange
 
@@ -464,18 +466,15 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
     if not manager.finviz or meta.get("price_source", "finviz") != "finviz":
         raise ValueError("Batch signal outcomes require a Finviz daily-price run.")
     now = now or dt.datetime.now(dt.timezone.utc)
-    finished = dt.datetime.fromisoformat(meta["finished_utc"])
     cal = exchange()
-    entry = cal.next_session(cal.date_to_session(meta["asof"], direction="previous"))
-    while cal.session_open(entry) <= finished:
-        entry = cal.next_session(entry)
+    if not cal.is_session(meta["asof"]):
+        raise ValueError("The saved signal date has no NYSE closing session.")
+    entry = cal.date_to_session(meta["asof"])
     if target is not None:
         holds = [TARGET_SESSIONS]
-    sessions = [entry] + [
-        cal.session_offset(entry, h - 1 if target is not None else h) for h in holds
-    ]
+    sessions = [entry] + [cal.session_offset(entry, h) for h in holds]
     dates = [s.date().isoformat() for s in sessions]
-    elapsed = [cal.session_open(s) <= now for s in sessions]
+    elapsed = [cal.session_close(entry) <= now] + [cal.session_open(s) <= now for s in sessions[1:]]
     close_days = [
         s.date().isoformat()
         for s in cal.sessions_in_range(entry, max(sessions))
@@ -484,12 +483,17 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
     ratios = {day: [] for day in close_days} if target is None else {}
     prices = {}
     target_bars = {}
-    window = cal.sessions_in_range(entry, sessions[-1]) if target is not None else []
+    window = cal.sessions_in_range(cal.next_session(entry), sessions[-1]) if target is not None else []
+    completed_sessions = sum(cal.session_close(s) <= now for s in window)
+    snapshot = folder / "history_cache.json"
+    saved_quotes = {}
+    if elapsed[0] and sm.regular_file(snapshot, folder):
+        saved_quotes = json.loads(snapshot.read_text()).get("history", {}).get(dates[0], {})
     observed_days = [s.date().isoformat() for s in window if cal.session_open(s) <= now]
 
     def positive(value):
         return (
-            value if value is not None and math.isfinite(value) and value > 0 else None
+            value if isinstance(value, (float, int)) and math.isfinite(value) and value > 0 else None
         )
 
     for symbol in symbols:
@@ -506,16 +510,19 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
                         continue
                     if bars:
                         break
-        values = [
-            bars.get(day, {}).get("o") if ready else None
-            for day, ready in zip(dates, elapsed)
-        ]
+        aliases = (symbol, symbol.replace("-", "."), symbol.replace(".", "-"))
+        recorded = next((saved_quotes[key]["c"] for key in aliases if positive(saved_quotes.get(key, {}).get("c"))), None)
+        cached = positive(bars.get(dates[0], {}).get("c"))
+        if recorded and cached and not math.isclose(recorded, cached, rel_tol=.001):
+            raise ValueError(f"{symbol} has inconsistent recorded and cached closes on {dates[0]}. Check price adjustments before replaying.")
+        buy = (recorded or cached) if elapsed[0] else None
+        values = [buy] + [bars.get(day, {}).get("o") if ready else None for day, ready in zip(dates[1:], elapsed[1:])]
         prices[symbol] = [positive(v) for v in values]
         if target is not None:
             target_bars[symbol] = []
             for i, day in enumerate(observed_days):
                 bar = bars.get(day, {})
-                complete = i < len(close_days)
+                complete = i < completed_sessions
                 target_bars[symbol].append(
                     dict(
                         open=positive(bar.get("o")),
@@ -525,7 +532,7 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
                 )
         elif prices[symbol][0]:
             for day in close_days:
-                close = bars.get(day, {}).get("c")
+                close = buy if day == dates[0] else bars.get(day, {}).get("c")
                 if close and math.isfinite(close) and close > 0:
                     ratios[day].append(close / prices[symbol][0])
     return dict(
@@ -533,7 +540,7 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
             dict(
                 target_bars=target_bars,
                 target_days=[s.date().isoformat() for s in window],
-                completed_sessions=len(close_days),
+                completed_sessions=completed_sessions,
             )
             if target is not None
             else {}
@@ -553,4 +560,5 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
         elapsed=elapsed,
         prices=prices,
         signal_day=meta["asof"],
+        entry_basis="signal_close",
     )

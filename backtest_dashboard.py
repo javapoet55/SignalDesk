@@ -169,13 +169,19 @@ def warmup_note(info):
     return "The strategy held cash during indicator warm-up for " + ", ".join(counts) + "."
 
 
+def entry_label(info):
+    return "Signal-day close" if info.get("entry_basis") == "signal_close" else "Next eligible open"
+
+
 def target_rule(info):
     target = info.get("profit_target_pct")
     if not target:
         return ""
     if info.get("exit_on_target"):
         return (f"Sell at the first {target:g}% gain from entry, or at the opening price if it gaps above the target. "
-                "If the target is missed, sell at the close of trading day seven. The entry day counts as day one.")
+                "If the target is missed, sell at the close of trading day seven. "
+                + ("Day one is the first trading session after the signal close." if info.get("entry_basis") == "signal_close"
+                   else "The entry day counts as day one."))
     return f"A win means the price reached {target:g}% above entry during the hold. Net P/L uses the scheduled exit price."
 
 
@@ -339,12 +345,14 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             ),
             "half",
         )
+    if info.get("entry_basis") == "signal_close":
+        context += "<p class='muted'>Simulated entries use the closing price of the signal bar. This assumes a fill at the final close used to calculate the signal.</p>"
     if info.get("warmup_sessions"):
         context += f"<p class='muted'>{e(warmup_note(info))}</p>"
     if target is not None:
         context += f"<p class='muted'>{e(target_rule(info))}</p>"
-        if not batch and full.get("open_trades"):
-            context += f"<p class='muted'>Open at the end of the replay: {full['open_trades']}. Equity includes their closing valuations.</p>"
+    if not batch and full.get("open_trades"):
+        context += f"<p class='muted'>Open at the end of the replay: {full['open_trades']}. Equity includes their closing valuations.</p>"
     out.append(
         f"<div class='meta'>{e(start)} — {e(end)}<br><small>Daily · VectorBT PRO {e(result['engine'])}</small></div></header>{context}"
     )

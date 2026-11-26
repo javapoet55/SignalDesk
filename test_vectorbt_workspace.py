@@ -144,6 +144,7 @@ class WorkspaceFlow(unittest.TestCase):
             page.wait_for_url("**/vectorbt?job=*")
             self.assertEqual(submitted[0]["holds"], [7])
             self.assertTrue(submitted[0]["exit_on_target"])
+            self.assertEqual(submitted[0]["entry_basis"], "signal_close")
             self.assertEqual(submitted[0]["fee_bps"], 10)
             self.assertEqual(submitted[0]["profit_target_pct"], 2)
             self.assertGreaterEqual(submitted[0]["preparation_seconds"], 0)
