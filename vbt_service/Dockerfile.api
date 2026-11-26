@@ -1,0 +1,9 @@
+# API-only image for Railway builds from GitHub. Railway cannot select one stage of the
+# multi-stage Dockerfile, and the worker stage needs the licensed VectorBT PRO archive.
+# Build from the repository root: RAILWAY_DOCKERFILE_PATH / Dockerfile path = vbt_service/Dockerfile.api
+FROM python:3.12-slim
+WORKDIR /app
+COPY vbt_service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY vbt_service/ ./vbt_service/
+CMD ["sh","-c","exec uvicorn vbt_service.api:app --host :: --port ${PORT:-8000}"]

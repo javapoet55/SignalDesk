@@ -50,6 +50,9 @@ def submit(st, fields, buys):
     started = time.monotonic()
     rid = fields.get("rid", "")
     target = backtests.profit_target(fields.get("profit_target_pct"))
+    stop = backtests.stop_loss(fields.get("stop_loss_pct"))
+    if stop and not target:
+        raise ValueError("Enter a profit target to use a stop loss.")
     try:
         fee = float(fields.get("commission") or "0") * 100  # Portal percent to engine basis points.
     except ValueError:
@@ -101,6 +104,7 @@ def submit(st, fields, buys):
             interval=(start, end) if start else None,
         )
     data["profit_target_pct"] = target
+    data["stop_loss_pct"] = stop
     return backtests.submit_job(data, started)
 
 
@@ -171,7 +175,8 @@ def export(kind, info, m):
         ),
         Paragraph(
             f"{entry_label(info)} entry · {esc(m['start'])} through {esc(m['end'])} · {'Up to ' if info.get('exit_on_target') else ''}{m['hold']} sessions · "
-            f"{info['fee_bps']:g} bps per side" + (f" · Profit target {info['profit_target_pct']:g}%" if info.get("profit_target_pct") else ""),
+            f"{info['fee_bps']:g} bps per side" + (f" · Profit target {info['profit_target_pct']:g}%" if info.get("profit_target_pct") else "")
+            + (f" · Stop loss {info['stop_loss_pct']:g}%" if info.get("stop_loss_pct") else ""),
             styles["BodyText"],
         ),
         Spacer(1, 14),
@@ -420,6 +425,7 @@ def report(job, key, m, window):
             ("Date range", m["start"] + " – " + m["end"] if m else "—"),
             ("Initial capital", fmt(CAPITAL, "usd")),
             ("Profit target", f"{info['profit_target_pct']:g}%" if info.get("profit_target_pct") else "—"),
+            ("Stop loss", f"{info['stop_loss_pct']:g}%" if info.get("stop_loss_pct") else "—"),
             ("Holding period", ("Up to " if info.get("exit_on_target") else "") + holding_label(m["hold"]) if m else "—"),
             ("Signals", info.get("source", "—")),
             (
@@ -449,6 +455,8 @@ def report(job, key, m, window):
             notes.append("Entries assume a fill at the closing price used to calculate the daily signal.")
         if m.get("profit_target_pct"):
             notes.append(target_rule(info))
+            if m.get("stop_loss_pct"):
+                notes.append(f"{m['stopped']} of {m['trades']} closed trades were stopped out.")
             if m["unscored"]:
                 notes.append(f"Incomplete daily highs left {m['unscored']} closed trades unscored.")
         if open_count := job["result"].get("full_period", {}).get("open_trades", 0):
@@ -503,6 +511,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
             value = "ALL"
     commission = fields.get("commission", format(info.get("fee_bps", 0) / 100, "g"))
     target = fields.get("profit_target_pct", info.get("profit_target_pct") or "")
+    stop = fields.get("stop_loss_pct", info.get("stop_loss_pct") or "")
     start, end = fields.get("start", ""), fields.get("end", "")
     if not fields and info.get("source") == "Historical date-range replay":
         start, end = info.get("_start", ""), info.get("_end", "")
@@ -533,6 +542,8 @@ def controls(runs, rid, info, symbols, enabled, fields):
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
         "title='Buy at the signal close. Sell on the first target touch during the next seven trading days, or at the seventh close.'></label>"
+        f"<label>Stop loss (%)<input name='stop_loss_pct' type='number' min='0' max='99.99' step='any' value='{esc(stop)}' placeholder='Optional' "
+        "title='Used with a profit target. Sell when the price falls this far below entry. If one day touches both the stop and the target, the stop counts first.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"
@@ -566,7 +577,7 @@ def coverage_options(error, fields):
     forms = []
     for label, values in options:
         inputs = "".join(f"<input type='hidden' name='{name}' value='{esc(values.get(name, ''))}'>"
-                         for name in ("rid", "symbols", "start", "end", "holds", "profit_target_pct", "commission")
+                         for name in ("rid", "symbols", "start", "end", "holds", "profit_target_pct", "stop_loss_pct", "commission")
                          if name in values)
         forms.append(f"<form method='post' action='/vectorbt/run'>{inputs}<button type='submit'>{esc(label)}</button></form>")
     return "<div class='vb-recovery'>" + "".join(forms) + "</div>" if forms else ""
@@ -754,7 +765,7 @@ CSS = """
 .vb-recovery{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.vb-recovery form{margin:0}
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
-.vb-controls{display:grid;grid-template-columns:1.35fr 1.65fr .78fr .9fr .8fr 1.45fr auto;align-items:end;gap:16px;margin-bottom:16px}
+.vb-controls{display:grid;grid-template-columns:1.3fr 1.5fr .78fr .85fr .8fr .8fr 1.35fr auto;align-items:end;gap:16px;margin-bottom:16px}
 .vb-controls label,.vb-controls summary{display:grid;gap:6px;font-size:13px}.vb-controls :is(input,select),.vb-dates summary span{box-sizing:border-box;width:100%;min-width:0;font:inherit;font-size:14px;color:var(--sd-ink);background:var(--bg);border:1px solid var(--edge);border-radius:7px;height:38px;padding:8px 10px}
 .vb-app .vb-controls summary{padding:0;margin:0;color:var(--sd-ink);font-weight:400}
 .vb-app .vb-controls details{position:relative;margin:0;padding:0;border:0;background:none}

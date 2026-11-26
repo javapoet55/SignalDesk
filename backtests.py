@@ -47,6 +47,26 @@ def profit_target(value):
     return target
 
 
+def stop_loss(value):
+    if value is None or value.strip() == "":
+        return None
+    try:
+        stop = float(value)
+    except ValueError:
+        stop = 0
+    if not math.isfinite(stop) or not 0 < stop < 100:
+        raise ValueError("Enter a stop loss between 0 and 100 percent or leave it blank.")
+    return stop
+
+
+def daily_low(bar):
+    value, prices = bar.get("l"), [bar.get("o"), bar.get("c")]
+    if (isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+            and all(isinstance(p, (int, float)) and value <= p for p in prices)):
+        return value
+    return None
+
+
 def daily_high(bar):
     value = bar.get("h")
     if isinstance(value, (int, float)) and math.isfinite(value) and value > 0 and value >= max(bar["o"], bar["c"]):
@@ -241,6 +261,7 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
                 day=d,
                 open=hist[d][key]["o"],
                 high=daily_high(hist[d][key]),
+                low=daily_low(hist[d][key]),
                 close=hist[d][key]["c"],
                 signal=d in by_symbol[ticker],
             )
@@ -335,7 +356,7 @@ def dataset(
             and bar[k] > 0
             for k in ("o", "c")
         ):
-            bars.append(dict(day=day, open=bar["o"], high=daily_high(bar), close=bar["c"], signal=False))
+            bars.append(dict(day=day, open=bar["o"], high=daily_high(bar), low=daily_low(bar), close=bar["c"], signal=False))
     if not 4 <= len(bars) <= 3000:
         raise ValueError("Choose a symbol with 4–3000 daily bars in the selected run.")
     if sessions is not None:
@@ -412,6 +433,8 @@ def dataset(
 
 def submit_job(data, started):
     data["entry_basis"] = "signal_close"
+    if data.get("stop_loss_pct") and not data.get("profit_target_pct"):
+        raise ValueError("Enter a profit target to use a stop loss.")
     if data.get("profit_target_pct"):
         data["exit_on_target"] = True
         if "bars" in data and data.get("source") != "Historical date-range replay":
@@ -549,6 +572,7 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None, *, target=None):
                     dict(
                         open=positive(bar.get("o")),
                         high=daily_high(bar) if complete else None,
+                        low=daily_low(bar) if complete else None,
                         close=positive(bar.get("c")) if complete else None,
                     )
                 )
