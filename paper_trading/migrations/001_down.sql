@@ -1,0 +1,14 @@
+BEGIN IMMEDIATE;
+DROP TABLE paper_corporate_actions;
+DROP TABLE paper_journal_entries;
+DROP TABLE paper_portfolio_snapshots;
+DROP TABLE paper_audit_events;
+DROP TABLE paper_cash_ledger;
+DROP TABLE paper_transactions;
+DROP TABLE paper_orders;
+DROP TABLE paper_positions;
+DROP TABLE paper_signals;
+DROP TABLE paper_portfolio_settings;
+DROP TABLE paper_portfolios;
+PRAGMA user_version=0;
+COMMIT;

@@ -1,0 +1,19 @@
+{
+  "top_n": 10,
+  "timeframes": ["change"],
+  "include_nonpositive": false,
+
+  "saved_presets": [
+    {
+      "name": "EXAMPLE - replace with your preset",
+      "url": "https://elite.finviz.com/screener.ashx?v=111&f=cap_smallover,sh_avgvol_o500,sh_price_o5&ft=4",
+      "enabled": false
+    }
+  ],
+
+  "builtin_signals": {
+    "enabled": true,
+    "include": "all",
+    "exclude": []
+  }
+}
