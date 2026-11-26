@@ -2821,7 +2821,7 @@ class Handler(BaseHTTPRequestHandler):
             if match and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
                 try:
                     job = backtests.service("/jobs/" + match[1])
-                    return self._html(200, backtests.result_html(job, path))
+                    return self._html(200, backtests.result_html(job, path, urllib.parse.parse_qs(parts.query).get("hold", [""])[0]))
                 except ValueError as exc:
                     return self._text(503, str(exc))
             if path == "/strategies/archive":

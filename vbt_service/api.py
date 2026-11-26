@@ -33,6 +33,9 @@ class Cohort(BaseModel):
     version: str = Field(max_length=64)
     symbol: str = Field(max_length=15)
     source: str
+    close_marks: dict[str, FiniteFloat | None] = Field(
+        default_factory=dict, max_length=253
+    )
     signal_day: str
     dates: list[str] = Field(min_length=2, max_length=11)
     elapsed: list[bool] = Field(min_length=2, max_length=11)

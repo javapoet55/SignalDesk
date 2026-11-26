@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import strategies as sm
+from backtest_dashboard import result_html as result_html
 
 
 _REPLAY_SLOT = threading.BoundedSemaphore(1)
@@ -206,72 +207,6 @@ def service(path, data=None):
         ) from exc
 
 
-def result_html(job, refresh_path):
-    import html
-
-    e = lambda value: html.escape(str(value))
-    info = job["inputs"]
-    top = (
-        "<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
-        "<title>Strategy backtest</title><style>body{font:16px system-ui;max-width:850px;margin:4vh auto;padding:1rem}"
-        "td,th{padding:.5rem;text-align:right}svg{width:100%;height:180px}a{color:#387dc1}</style>"
-        f"<main><a href='/strategies/results/{e(info['run'])}/'>Return to strategy</a>"
-        f"<h1>{e(info['strategy'])} · {e(info['symbol'])}</h1>"
-    )
-    if job["error"]:
-        return top + "<p>Backtest failed. " + e(job["error"]) + "</p></main></html>"
-    r = job["result"]
-    if r is None:
-        return (
-            top
-            + f"<p>Queued or running.</p><a href='{e(refresh_path)}'>Refresh result</a></main></html>"
-        )
-    if "outcomes" in r:
-        return top + cohort_html(info, r)
-    full = r["full_period"]
-    equity = full["equity"]
-    low, high = min(equity), max(equity)
-    points = " ".join(
-        f"{i * 800 / (len(equity) - 1):.2f},{165 - (v - low) * 150 / max(0.01, high - low):.2f}"
-        for i, v in enumerate(equity)
-    )
-    rows = "".join(
-        f"<tr><td>{int(p['hold'])}</td><td>{int(p['trades'])}</td><td>{p['return_pct']:.2f}%</td>"
-        f"<td>{p['drawdown_pct']:.2f}%</td></tr>"
-        for p in r["parameters"]
-    )
-    validation = r["validation"]
-    test = (
-        f"{validation['trades']} trades, {validation['return_pct']:.2f}% return over the held-out period."
-        if validation
-        else "No training trades qualified a holding period for validation."
-    )
-    folds = "".join(
-        "<tr><td>"
-        + e(f["start"])
-        + " to "
-        + e(f["end"])
-        + "</td><td>"
-        + (str(f["hold"]) if f["hold"] else "No qualifying period")
-        + "</td><td>"
-        + (str(f["trades"]) if f["trades"] is not None else "—")
-        + "</td><td>"
-        + (f"{f['return_pct']:.2f}%" if f["return_pct"] is not None else "—")
-        + "</td></tr>"
-        for f in r.get("folds", [])
-    )
-    return top + (
-        f"<p>{e(r['days'][0])} through {e(r['days'][-1])} · {info['observed_days']} evaluation dates · {e(info.get('source', 'Archived signals'))} · "
-        f"Strategy version {e(info['version'])} · VectorBT PRO {e(r['engine'])}</p><h2>Training results</h2><table><tr><th>Hold (sessions)</th><th>Trades</th>"
-        f"<th>Return</th><th>Max drawdown</th></tr>{rows}</table><h2>Validation from {e(r['validation_start'])}</h2>"
-        f"<p>{e(test)}</p><h2>Walk-forward validation</h2><table><tr><th>Held-out dates</th><th>Training-selected hold</th><th>Trades</th><th>Return</th></tr>{folds}</table><h2>Full-period equity</h2><p>{full['hold']} sessions · {full['trades']} trades · "
-        f"{full['return_pct']:.2f}% return · {full['drawdown_pct']:.2f}% maximum drawdown</p>"
-        f"<svg viewBox='0 0 800 180' role='img' aria-label='Full-period equity curve'><polyline points='{points}' "
-        f"fill='none' stroke='#278673' stroke-width='3'/></svg><p>Starting cash $100,000. Final equity ${equity[-1]:,.2f}. "
-        f"Fee {info['fee_bps']:g} basis points per side.</p></main></html>"
-    )
-
-
 def cohort(manager, rid, holds, fee, signal_tickers, now=None):
     """Freeze the exact buy list, then look up observed opens on the required sessions."""
     import finviz_prices
@@ -313,6 +248,12 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None):
     sessions = [entry] + [cal.session_offset(entry, h) for h in holds]
     dates = [s.date().isoformat() for s in sessions]
     elapsed = [cal.session_open(s) <= now for s in sessions]
+    close_days = [
+        s.date().isoformat()
+        for s in cal.sessions_in_range(entry, max(sessions))
+        if cal.session_close(s) <= now
+    ]
+    ratios = {day: [] for day in close_days}
     prices = {}
     for symbol in symbols:
         bars = {}
@@ -335,7 +276,16 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None):
         prices[symbol] = [
             v if v is not None and math.isfinite(v) and v > 0 else None for v in values
         ]
+        if prices[symbol][0]:
+            for day in close_days:
+                close = bars.get(day, {}).get("c")
+                if close and math.isfinite(close) and close > 0:
+                    ratios[day].append(close / prices[symbol][0])
     return dict(
+        close_marks={
+            day: sum(values) / len(symbols) if len(values) == len(symbols) else None
+            for day, values in ratios.items()
+        },
         run=rid,
         strategy=meta["strategy"],
         version=meta.get("strategy_sha256") or "unversioned archive",
@@ -347,30 +297,4 @@ def cohort(manager, rid, holds, fee, signal_tickers, now=None):
         elapsed=elapsed,
         prices=prices,
         signal_day=meta["asof"],
-    )
-
-
-def cohort_html(info, result):
-    import html
-
-    esc = html.escape
-    holds = info["holds"]
-    headers = "".join(
-        f"<th>{h}-session return<br>{esc(day)}</th>"
-        for h, day in zip(holds, info["dates"][1:])
-    )
-    rows = []
-    for symbol, values in result["outcomes"].items():
-        cells = "".join(
-            f"<td>{v:.2f}%</td>"
-            if isinstance(v, (int, float))
-            else f"<td>{esc(v)}</td>"
-            for v in values
-        )
-        rows.append(f"<tr><th>{esc(symbol)}</th>{cells}</tr>")
-    return (
-        f"<p>{len(rows)} buy signals from {esc(info['signal_day'])}. Entry session: {esc(info['dates'][0])}. "
-        f"Fee: {info['fee_bps']:g} basis points per side. Each return is an independent open-to-open trade.</p>"
-        "<p>Run the batch again from the original strategy result after later daily prices are saved to update outcomes.</p>"
-        f"<table><tr><th>Symbol</th>{headers}</tr>{''.join(rows)}</table></main></html>"
     )

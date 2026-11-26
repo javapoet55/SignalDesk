@@ -7,7 +7,7 @@ import pandas as pd
 import vectorbtpro as vbt
 
 
-def simulate(bars, hold, fee_bps):
+def simulate(bars, hold, fee_bps, detail=False):
     index = pd.DatetimeIndex([b["day"] for b in bars])
     opens = pd.Series([b["open"] for b in bars], index=index)
     closes = pd.Series([b["close"] for b in bars], index=index)
@@ -28,13 +28,29 @@ def simulate(bars, hold, fee_bps):
         freq="1D",
     )
     equity = pf.value
-    return {
+    result = {
         "hold": hold,
         "trades": int(entries.sum()),
         "return_pct": float(pf.total_return) * 100,
         "drawdown_pct": abs(float(pf.max_drawdown)) * 100,
         "equity": [round(float(x), 2) for x in equity],
     }
+
+    if detail:
+        result["fills"] = [
+            dict(
+                entry=bars[t["entry_idx"]]["day"],
+                exit=bars[t["exit_idx"]]["day"],
+                buy=t["entry_price"],
+                sell=t["exit_price"],
+                pnl=t["pnl"],
+                pct=t["return"] * 100,
+                hold=t["exit_idx"] - t["entry_idx"],
+            )
+            for t in pf.trades.records.to_dict("records")
+        ]
+        result["benchmark"] = [100000 * b["close"] / bars[0]["close"] for b in bars]
+    return result
 
 
 def cohort_returns(data):
@@ -128,5 +144,7 @@ def calculate(data):
         "parameters": [{k: v for k, v in r.items() if k != "equity"} for r in trained],
         "validation_start": bars[split]["day"],
         "validation": simulate(bars[split:], best["hold"], fee) if best else None,
-        "full_period": simulate(bars, best["hold"] if best else holds[0], fee),
+        "full_period": simulate(
+            bars, best["hold"] if best else holds[0], fee, detail=True
+        ),
     }
