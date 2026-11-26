@@ -22,6 +22,8 @@ NAV = (
     ("backtests", "VectorBT PRO", "/vectorbt"),
     ("settings", "Settings", "/strategies?tab=settings"),
 )
+POLL_SECONDS = 30  # How often a queued backtest's page reloads itself.
+POLL_LIMIT = 40    # Reloads before it stops: 20 minutes at 30 seconds.
 TRADE_HEADERS = [
     "Symbol",
     "Side",
@@ -442,7 +444,7 @@ def report(job, key, m, window):
     elif job.get("error"):
         notes = [job["error"]]
     elif not m:
-        notes = ["Queued or running. This page checks for the result every few seconds."]
+        notes = [f"Queued or running. This page refreshes every {POLL_SECONDS} seconds until the result is ready."]
     else:
         notes = ["Backtest completed" + (
             f" · {sum('Pending' in r[8] for r in m['rows'])} pending"
@@ -681,6 +683,7 @@ def page(host, query, fields=None, error=""):
         )
         + "</details></div></main><script>"
         + f"const VB_PENDING={'true' if job and not job.get('error') and not m else 'false'};"
+        + f"const VB_POLL_MS={int(POLL_SECONDS * 1000)},VB_POLL_LIMIT={POLL_LIMIT};"
         + SCRIPT
         + "</script></body></html>"
     )
@@ -748,15 +751,15 @@ document.querySelector('#vb-saved')?.addEventListener('click',()=>document.query
 form.addEventListener('invalid',e=>{if(dates.contains(e.target))dates.open=true;if(picker.contains(e.target))picker.open=true},true);
 form.onsubmit=()=>{updateRange(true);form.querySelector('button').disabled=true;form.querySelector('button').textContent='Submitting…'};
 window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
-// A queued backtest: look again every 3 seconds, for up to 6 minutes, unless the form is being edited.
+// A queued backtest: reload on a fixed interval, up to a limit, unless the form is being edited.
 const here=new URL(location.href), polls=Number(here.searchParams.get('poll'))||0;
 if(VB_PENDING){
   let editing=false;
   form.addEventListener('input',()=>editing=true);
-  if(polls<120) setTimeout(()=>{
+  if(polls<VB_POLL_LIMIT) setTimeout(()=>{
     if(editing||picker.open||dates.open) return;
     here.searchParams.set('poll',polls+1);location.replace(here);
-  },3000);
+  },VB_POLL_MS);
 }else if(here.searchParams.has('poll')){
   here.searchParams.delete('poll');history.replaceState(null,'',here);
 }

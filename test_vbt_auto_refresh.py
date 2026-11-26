@@ -31,6 +31,7 @@ class PendingFlag(unittest.TestCase):
                   patch("backtests.service", side_effect=service), patch("dow_benchmark.equity", return_value=[])):
                 _, body = server.request("GET", "/vectorbt?job=" + KEY)
             self.assertIn(f"const VB_PENDING={flag};", body.decode())
+            self.assertIn("const VB_POLL_MS=30000,VB_POLL_LIMIT=40;", body.decode())
 
 
 @unittest.skipUnless(sync_playwright and os.getenv("PORTAL_BROWSER_TEST"), "optional Chrome suite")
@@ -50,6 +51,7 @@ class AutoRefresh(unittest.TestCase):
 
         with (patch.dict(os.environ, VBT_SERVICE_URL="http://vbt.invalid", VBT_SERVICE_TOKEN="fixture"),
               patch("backtests.service", side_effect=service), patch("dow_benchmark.equity", return_value=[]),
+              patch("vectorbt_workspace.POLL_SECONDS", 1),  # the real interval is 30 seconds
               sync_playwright() as pw):
             browser = pw.chromium.launch(channel="chrome")
             page = browser.new_page()
@@ -71,13 +73,13 @@ class AutoRefresh(unittest.TestCase):
             page.goto(base + "/vectorbt?job=" + KEY)
             page.get_by_label("Hold (trading days)").fill("7")
             seen = len(lookups)
-            page.wait_for_timeout(7000)
+            page.wait_for_timeout(4000)
             self.assertEqual(len(lookups), seen)
             self.assertEqual(page.get_by_label("Hold (trading days)").input_value(), "7")
             # The polling stops at the limit instead of running forever.
-            page.goto(base + "/vectorbt?job=" + KEY + "&poll=120")
+            page.goto(base + "/vectorbt?job=" + KEY + "&poll=40")
             seen = len(lookups)
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(4000)
             self.assertEqual(len(lookups), seen)
             self.assertFalse(errors)
             browser.close()
