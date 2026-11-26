@@ -4,7 +4,6 @@ import datetime as dt
 import hashlib
 from html import escape
 
-import portal_workspace as studio
 from strategies import _atomic_json, parse_candles, regular_file
 from strategy_design import icon
 
@@ -134,7 +133,6 @@ def render(app):
         return server._fmt_short(value, zone)
 
     fmtname = server._pretty_name
-    side, tabs = studio.strategy_navigation(server.TABS, "settings")
     basis = configured.get("mode", selection.get("mode", "close"))
     candle = configured.get("candles", selection.get("candles", "1d"))
     provider = "FinViz Elite" if st.price_source == "finviz" else "Massive (Polygon)"
@@ -371,13 +369,7 @@ def render(app):
     )
     search = "<input type='search' id='ss-search' aria-keyshortcuts='Control+K Meta+K' aria-label='Search settings and strategies' placeholder='Search settings and strategies…　⌘ K'>"
     return (
-        "<div id='ss-root'><aside class='ss-side'><a class='ss-brand' href='/'><i class='ss-mark' aria-hidden='true'><em></em><em></em><em></em><em></em></i><span>Finviz Agent<small>AI Trading Research Studio</small></span></a><nav aria-label='Portal modules'>"
-        + side
-        + "</nav>"
-        + "<details class='ss-workspace'><summary>Workspace</summary>"
-        + server.theme_control()
-        + "<form method='post' action='/logout'><button>Logout</button></form></details>"
-        + f"<footer><i>{h(user[:1].upper())}</i><div>{h(user)}<small>Workspace owner</small></div></footer></aside><article class='ss-main'>"
+        "<div id='ss-root'><article class='ss-main'>"
         + "<div class='ss-bar'><span><a href='/strategies'>Strategies</a>　 /　 <b>Strategy Settings</b></span>"
         + search
         + bell
@@ -386,9 +378,6 @@ def render(app):
         + "</button>"
         + "</div>"
         + "<h1>Strategy Settings</h1><p>Configure data sources, versions, notifications, and access for your trading strategies.</p>"
-        + "<nav class='ss-tabs' aria-label='Settings workspace'>"
-        + tabs
-        + "</nav>"
         + server._flash_html(app, "strategy-settings")
         + "<div class='ss-grid'><div>"
         + "".join(
@@ -480,11 +469,10 @@ document.addEventListener('keydown', event => {
 """
 
 CSS = """
-body:has(.studio-page[data-view=settings]) main{max-width:none;padding:0}
-body:has(.studio-page[data-view=settings]) :is(.sd-header,.sd-hero,main>.studio-tabs,main>p.muted){display:none}
+body:has(.studio-page[data-view=settings]) :is(.sd-hero,main>p.muted){display:none}
 .studio-page[data-view=settings]>:not(#ss-host){display:none!important}
 #ss-host{min-height:100vh}
-:is(#ss-root,#rh-root){--ss-border:var(--sd-line);--ss-surface:var(--sd-card);--ss-field:var(--bg);--ss-green:var(--sd-mint);--ss-sub:var(--sd-muted);--ss-dim:color-mix(in srgb,var(--ss-green) 10%,var(--ss-surface));color:var(--sd-ink);display:grid;grid-template-columns:clamp(188px,15.1vw,242px) minmax(0,1fr);min-height:100vh;font:14px/1.4 system-ui,-apple-system,sans-serif}
+:is(#ss-root,#rh-root){--ss-border:var(--sd-line);--ss-surface:var(--sd-card);--ss-field:var(--bg);--ss-green:var(--sd-mint);--ss-sub:var(--sd-muted);--ss-dim:color-mix(in srgb,var(--ss-green) 10%,var(--ss-surface));color:var(--sd-ink);display:block;min-width:0;font:14px/1.4 system-ui,-apple-system,sans-serif}
 html[data-theme=dark] :is(#ss-root,#rh-root){--ss-border:#344853;--ss-field:#0c171f;--ss-green:#70e8ba;--ss-surface:#13212a;--ss-sub:#c0d0da;background:radial-gradient(ellipse at 58% 30%,#0f1b23,#09131b 80%)}
 :is(#ss-root,#rh-root) *{box-sizing:border-box}
 :is(#ss-root,#rh-root) form,:is(#ss-root,#rh-root) nav{margin:0}
@@ -509,7 +497,7 @@ html[data-theme=dark] :is(#ss-root,#rh-root){--ss-border:#344853;--ss-field:#0c1
 .ss-workspace summary{cursor:pointer;padding:9px}.ss-workspace summary:after{content:'⌄';margin-left:auto}.ss-workspace .theme-switch{margin:8px 0}
 .ss-side footer{display:flex;align-items:center;gap:12px;margin:auto 8px 0;border-top:1px solid var(--ss-border);padding:20px 2px 0}
 .ss-side footer i,.ss-members i{display:grid;place-items:center;width:36px;height:36px;background:#258962;color:white;border-radius:100%;font-weight:700;font-style:normal}
-.ss-main{min-width:0;padding:0 clamp(14px,1.2vw,24px) 28px}
+.ss-main{min-width:0;padding:0 0 28px}
 .ss-bar{display:flex;align-items:center;gap:18px;min-height:50px;border-bottom:1px solid var(--ss-border)}
 :is(#ss-root,#rh-root) .ss-bar a{color:var(--ss-green)}
 :is(#ss-root,#rh-root) .ss-bar input{margin-left:auto;width:min(31%,365px);height:34px}

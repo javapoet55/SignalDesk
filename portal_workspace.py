@@ -20,52 +20,6 @@ ICONS = {
 }
 
 
-WORKSPACE_TABS = (
-    ("backtests", "Strategy Library", "configure"),
-    ("configure", "Run Configuration", "configure"),
-    ("calendar", "Scheduled Runs", "scheduled"),
-    ("scheduled", "Run History", "history"),
-    ("history", "VectorBT PRO", "/vectorbt"),
-    ("settings", "Settings", "settings"),
-)
-
-
-def strategy_navigation(portal_tabs, active):
-    nav = [
-        ("dashboard", "/", "Dashboard"),
-        *portal_tabs,
-        ("backtests", "/vectorbt", "VectorBT PRO"),
-    ]
-
-    def navlink(key, url, label):
-        glyph = (
-            "m2 10 10-8 10 8v11h-7v-7H9v7H2Z"
-            if key == "dashboard"
-            else ICONS.get(key)
-        )
-        image = (
-            f"<svg class='sd-icon' aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.6'><path d='{glyph}'/></svg>"
-            if glyph
-            else design.icon("backtests")
-        )
-        return (
-            f"<a href='{url}'"
-            + (" aria-current='page'" if key == "strategies" else "")
-            + f">{image}{escape('Latest Report' if key == 'report' else label)}</a>"
-        )
-
-    side = "".join(navlink(*item) for item in nav)
-    tabs = "".join(
-        f"<a href='{key if key.startswith('/') else '/strategies?tab=' + key}'"
-        + (f" data-workspace-tab='{key}'" if not key.startswith("/") else "")
-        + (" data-library='true'" if label == "Strategy Library" else "")
-        + (" aria-current='page'" if key == active else "")
-        + f">{design.icon(sym)}{label}</a>"
-        for sym, label, key in WORKSPACE_TABS
-    )
-    return side, tabs
-
-
 def subnav(current="configure"):
     items = []
     for key, title in SECTIONS:
@@ -84,19 +38,17 @@ def section_links(module, sections):
 
 
 def shell(tabs, active, controls):
-    if active == "strategies":
-        return "<style>" + CSS + "</style>" + design.header(tabs, controls)
     links = []
     title = "Account"
     for key, url, label in tabs:
         selected = key == active
         if selected:
             title = label
-        icon = f"<svg viewBox='0 0 24 24' aria-hidden='true'><path d='{ICONS[key]}'/></svg>"
+        icon = design.icon("backtests") if key == "vectorbt" else f"<svg viewBox='0 0 24 24' aria-hidden='true'><path d='{ICONS[key]}'/></svg>"
         links.append(f"<a href='{url}'" + (" aria-current='page'" if selected else "")
                      + f">{icon}{escape(label)}</a>")
-    links.insert(2, "<a href='/vectorbt'>" + design.icon("backtests") + "VectorBT PRO</a>")
-    return ("<style>" + CSS + "</style><aside class='studio-rail' id='studio-rail'>"
+    styles = CSS + (design.CSS if active == "strategies" else "")
+    return ("<style>" + styles + "</style><aside class='studio-rail' id='studio-rail'>"
             "<a href='/' class='studio-brand'><i aria-hidden='true'><span></span><span></span><span></span></i>Finviz Agent</a>"
             "<nav aria-label='Portal modules'>" + "".join(links) + "</nav></aside>"
             "<header class='studio-bar'><button type='button' class='studio-menu' aria-controls='studio-rail' "
@@ -111,6 +63,7 @@ def shell(tabs, active, controls):
 
 CSS = """
 body:has(.studio-rail){--rail:204px;--sbg:#f4f7f7;--surface:#fff;--stroke:#cfdddf;--stext:#142c33;
+--sd-line:var(--stroke);--sd-card:var(--surface);--sd-ink:var(--stext);--sd-muted:var(--sub);--sd-mint:var(--signal);
 --sub:#4a626a;--tint:#d9f2e8;--signal:#12664e;margin:0;padding-left:var(--rail);box-sizing:border-box;
 background:var(--sbg);color:var(--stext);font-family:system-ui,-apple-system,sans-serif}
 html[data-theme=dark] body:has(.studio-rail){--sbg:#0c161d;--surface:#13232c;--stroke:#30434e;
@@ -129,6 +82,8 @@ body:has(.studio-rail) main{width:100%;max-width:1560px;box-sizing:border-box;ma
 .studio-bar button[aria-pressed=true]{background:var(--tint);color:var(--signal)}.studio-menu{display:none}
 .studio-tabs{display:flex;align-items:stretch;gap:6px;border-bottom:1px solid var(--stroke);margin:0 0 22px;padding:0;overflow-x:auto;max-width:100%}
 .studio-tabs a{white-space:nowrap;color:var(--sub);font:600 14px system-ui;padding:12px 10px;border-bottom:3px solid transparent;text-decoration:none}
+.sd-icon{width:20px;height:20px;display:inline-block;flex:none;vertical-align:middle}
+.studio-tabs .sd-icon{width:16px;height:16px;vertical-align:middle;margin-right:6px}
 .studio-tabs a[aria-current],.studio-tabs a:hover{border-color:var(--signal);color:var(--signal)}
 .studio-rail a:focus-visible,.studio-tabs a:focus-visible,body:has(.studio-rail) button:focus-visible{outline:2px solid var(--signal);outline-offset:-2px}
 body:has(.studio-rail) .card{border-radius:11px}.studio-stats{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}

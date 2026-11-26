@@ -48,9 +48,8 @@ def page(host, owner):
         + (
             server.render_tabs("paper")
             if owner == host.app.settings.user
-            else "<nav class='app-nav'><a href='/paper'>Paper Trading</a>"
-            + server.theme_control()
-            + "<form action='/paper/logout' method='post'><button>Sign out</button></form></nav>"
+            else server.studio.shell(server.TABS, "paper", "<div class='account-controls'>" + server.theme_control()
+                                    + "<form action='/paper/logout' method='post'><button>Sign out</button></form></div>")
         )
         + (ROOT / "paper.html").read_text()
         + "</main><script>"

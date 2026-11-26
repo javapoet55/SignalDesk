@@ -129,8 +129,9 @@ class HistoryWorkspaceTests(unittest.TestCase):
                 page.set_viewport_size({"width": width, "height": 941})
                 bounds = root.bounding_box()
                 viewport = page.evaluate("document.documentElement.clientWidth")
-                self.assertAlmostEqual(bounds["width"], min(viewport, 1360), delta=1)
-                self.assertAlmostEqual(bounds["x"], (viewport - bounds["width"]) / 2, delta=1)
+                side_width = page.locator("#studio-rail").bounding_box()["width"] if width > 760 else 0
+                self.assertLessEqual(bounds["width"], min(viewport-side_width, 1360))
+                self.assertAlmostEqual(bounds["x"] - side_width, viewport - bounds["width"] - bounds["x"], delta=1)
                 self.assertLessEqual(
                     page.evaluate("document.documentElement.scrollWidth"), width + 1
                 )

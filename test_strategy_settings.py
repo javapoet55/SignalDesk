@@ -138,7 +138,7 @@ class StrategySettingsTests(unittest.TestCase):
             root.get_by_label("Price Basis", exact=True).select_option("intraday")
             root.get_by_label("Default Candles", exact=True).select_option("5d")
             root.get_by_role("button", name="Save defaults").click()
-            root.get_by_role("link", name="Run Configuration").click()
+            page.get_by_role("navigation", name="Strategy workspace").get_by_text("Configure & Run").click()
             self.assertEqual(page.locator("#go [name=mode]").input_value(), "intraday")
             self.assertEqual(page.locator("#go [name=cn]").input_value(), "5")
             browser.close()

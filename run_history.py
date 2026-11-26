@@ -8,7 +8,6 @@ from statistics import mean
 from urllib.parse import quote, urlencode
 
 import backtests
-import portal_workspace as studio
 import strategies as sm
 import vectorbt_workspace as vb
 from backtest_dashboard import fmt
@@ -385,25 +384,11 @@ def panel(app, params):
         pagination.append(page_button(n, str(n)))
         previous = n
     pagination.append(page_button(number + 1, "›"))
-    side, tabs = studio.strategy_navigation(server.TABS, "history")
-    brand = "<a class='ss-brand' href='/'><i class='ss-mark' aria-hidden='true'><em></em><em></em><em></em><em></em></i><span>Finviz Agent</span></a>"
-    owner = escape(app.settings.user)
     return (
-        "<div id='rh-root'><aside class='ss-side'>"
-        + brand
-        + "<nav aria-label='Portal modules'>"
-        + side
-        + "</nav>"
-        + f"<footer><div><b>Strategy workspace</b><small>{len(names)} strategies in run history</small></div></footer></aside><article class='ss-main'>"
-        + "<header class='rh-bar'><strong>Strategies</strong>"
-        + server.theme_control()
-        + "<a class='rh-bell' href='/strategies?tab=settings#notifications' aria-label='Portal notifications'>"
+        "<div id='rh-root'><article class='ss-main'><div class='rh-title'><h1>Run History</h1>"
+        "<a href='/strategies?tab=settings#notifications' aria-label='Portal notifications'>"
         + icon("bell")
-        + "</a>"
-        + f"<details><summary><i>{escape(app.settings.user[:1].upper())}</i> {owner}　⌄</summary><form method='post' action='/logout'><button>Logout</button></form></details></header>"
-        + "<nav class='ss-tabs' aria-label='History workspace'>"
-        + tabs
-        + "</nav><h1>Run History</h1><p>View past strategy runs, results, and performance. Select a run to see detailed signals and analytics.</p>"
+        + "</a></div><p>View past strategy runs, results, and performance. Select a run to see detailed signals and analytics.</p>"
         + cards(all_runs, app.clock())
         + "<form class='rh-filters' id='rh-filters'>"
         + filters
@@ -526,11 +511,11 @@ async function loadRunHistory(host, force=false) {
 """
 
 CSS = """
-body:has(.studio-page[data-view=history]) main{width:100%;max-width:1360px;margin-inline:auto;padding:0}
-body:has(.studio-page[data-view=history]) :is(.sd-header,.sd-hero,main>.studio-tabs,main>p.muted){display:none}
+#rh-root{max-width:1360px;margin-inline:auto}
+body:has(.studio-page[data-view=history]) :is(.sd-hero,main>p.muted){display:none}
 .studio-page[data-view=history]>:not(#rh-host){display:none!important}
-#rh-root{grid-template-columns:clamp(185px,16%,220px) minmax(0,1fr)}
-#rh-root .ss-main{padding:0 clamp(14px,1.32vw,26px) 28px}
+#rh-root .rh-title{display:flex;align-items:center;justify-content:space-between}
+#rh-root .ss-main{padding:0 0 28px}
 #rh-root .ss-brand{padding:0 5px 16px;margin:0 4px 17px;gap:13px;border-bottom:1px solid var(--ss-border)}
 #rh-root .ss-side nav a{padding:10px 13px}
 #rh-root .ss-side footer{border:1px solid var(--ss-border);border-radius:10px;padding:14px}

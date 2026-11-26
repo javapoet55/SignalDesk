@@ -41,6 +41,7 @@ class PortalWorkspaceTests(unittest.TestCase):
             page.locator(".srow input").first.check()
             self.assertTrue(page.locator(".top2").is_visible())
             self.assertTrue(page.locator(".sd-right").is_visible())
+            self.assertLessEqual(page.locator(".sd-right h2 .sd-icon").first.bounding_box()["width"], 24)
             self.assertEqual(page.locator(".sd-metric").count(), 4)
             page.get_by_role("radio", name="Custom time").check()
             self.assertEqual(page.evaluate("new FormData(document.querySelector('#go')).get('when')"), "once")
@@ -63,13 +64,7 @@ class PortalWorkspaceTests(unittest.TestCase):
                 page.set_viewport_size({"width": width, "height": 1024})
                 for key in ("configure", "scheduled", "history", "backtests", "versions", "settings"):
                     tab = tabs.locator(f"[data-workspace-tab={key}]")
-                    if page.locator("#rh-root").is_visible():
-                        page.locator("#rh-root [data-workspace-tab=configure]").last.click()
-                        tab.click()
-                    elif page.locator("#ss-root").is_visible():
-                        page.get_by_role("link", name="Run Configuration", exact=True).click()
-                    else:
-                        tab.click()
+                    tab.click()
                     self.assertEqual(tab.get_attribute("aria-current"), "page")
                     heading = page.locator({"settings":"#ss-root h1", "history":"#rh-root h1"}.get(key,".sd-hero h1"))
                     heading.wait_for(state="visible")
@@ -81,11 +76,30 @@ class PortalWorkspaceTests(unittest.TestCase):
             page.get_by_role("button", name="Create schedule").click()
             self.assertEqual(page.locator("[name=when]:checked").input_value(), "weekdays")
             page.keyboard.press("Escape")
-            self.assertTrue(page.locator(".sd-header nav").is_visible())
+            self.assertTrue(page.get_by_role("button", name="Menu").is_visible())
             page.get_by_role("button", name="Day").click()
             self.assertEqual(page.locator("html").get_attribute("data-theme"), "light")
             for route in ("/", "/paper", "/journal", "/notes", "/notebook", "/tradingview", "/strategies/archive"):
                 self.assertEqual(page.goto(base + route).status, 200)
-                self.assertEqual(page.locator(".sd-header" if route.startswith("/strategies") else "#studio-rail").count(), 1)
+                self.assertEqual(page.locator("#studio-rail").count(), 1)
+            for width in (2560, 1024, 390):
+                page.set_viewport_size({"width": width, "height": 940})
+                page.goto(base + "/")
+                rail = page.locator("#studio-rail")
+                expected = rail.locator("nav a").all_text_contents()
+                for label, module_tabs in (("Strategies", "Strategy workspace"), ("VectorBT PRO", "Strategies Studio"), ("Paper Trading", "Paper trading")):
+                    if width < 761:
+                        page.get_by_role("button", name="Menu").click()
+                    rail.get_by_role("link", name=label, exact=True).click()
+                    self.assertEqual(rail.locator("nav a").all_text_contents(), expected)
+                    self.assertEqual(rail.locator("[aria-current=page]").inner_text(), label)
+                    local_tabs = page.get_by_role("navigation", name=module_tabs, exact=True)
+                    self.assertTrue(local_tabs.is_visible())
+                    if width > 760:
+                        self.assertTrue(rail.is_visible())
+                        self.assertLessEqual(rail.bounding_box()["x"] + rail.bounding_box()["width"], local_tabs.bounding_box()["x"])
+                    self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width + 1)
+                    if os.getenv("STUDIO_SCREENSHOTS"):
+                        page.screenshot(path=str(Path(os.environ["STUDIO_SCREENSHOTS"]) / f"navigation-{width}-{label}.png"))
             self.assertFalse(errors, errors)
             browser.close()

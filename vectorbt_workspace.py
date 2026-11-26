@@ -542,7 +542,7 @@ def page(host, query, fields=None, error=""):
     if defaults and m:
         defaults.update(_start=m["start"], _end=m["end"], _hold=m["hold"])
     form = controls(runs, rid, defaults, symbols, enabled, fields or {})
-    sidebar = "".join(
+    tabs = "".join(
         f"<a href='{url}'"
         + (" aria-current='page'" if url == "/vectorbt" else "")
         + f">{icon(key_)}{name}</a>"
@@ -558,8 +558,8 @@ def page(host, query, fields=None, error=""):
         "<title>VectorBT PRO Backtesting · Finviz Agent</title>"
         + server._THEME_INIT
         + f"<style>{server._CSS}{server._JOURNAL_DESIGN_CSS}</style></head><body class='journal-app vb-app'><main>"
-        + server.render_tabs("strategies")
-        + f"<style>{CSS}</style><div class='vb-layout'><aside class='vb-sidebar'><b>Strategies Studio</b><nav aria-label='Strategies Studio'>{sidebar}</nav></aside>"
+        + server.render_tabs("vectorbt")
+        + f"<style>{CSS}</style><nav class='studio-tabs' aria-label='Strategies Studio'>{tabs}</nav>"
         f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>VectorBT PRO Backtesting</h1>"
         "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
@@ -573,7 +573,7 @@ def page(host, query, fields=None, error=""):
             if history
             else "<p>No saved backtests available.</p>"
         )
-        + "</details></div></div></main><script>"
+        + "</details></div></main><script>"
         + SCRIPT
         + "</script></body></html>"
     )
@@ -622,11 +622,7 @@ window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
 
 CSS = """
 .vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--dow:#c88720;--edge:var(--sd-line)}
-.vb-app main{padding:0 14px!important;max-width:1900px!important}.vb-app .sd-header{padding:0 14px}
-.vb-layout{display:grid;grid-template-columns:182px minmax(0,1fr);min-height:calc(100vh - 50px)}
-.vb-sidebar{border-right:1px solid var(--edge);padding:24px 6px 12px 0}.vb-sidebar>b{display:block;padding:0 14px 14px}.vb-sidebar nav{display:grid;gap:4px}
-.vb-sidebar a{display:flex;align-items:center;gap:12px;border:1px solid transparent;border-radius:7px;padding:13px 15px;color:var(--sd-ink);font-weight:550;white-space:nowrap}
-.vb-sidebar a[aria-current]{background:var(--jsoft);border-color:var(--green);color:var(--green)}.vb-content{min-width:0;padding:18px 0 22px 22px}
+.vb-content{min-width:0}
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
 .vb-controls{display:grid;grid-template-columns:1.35fr 1.65fr .78fr .9fr .8fr 1.45fr auto;align-items:end;gap:16px;margin-bottom:16px}
@@ -646,7 +642,7 @@ CSS = """
 .vb-grid dl{margin:0}.vb-grid dl div{display:flex;justify-content:space-between;gap:7px;border-top:1px solid var(--edge);padding:4px 0;font-size:13px}.vb-grid dd{margin:0;text-align:right;font-weight:550;overflow-wrap:anywhere}.vb-grid dt{color:var(--sd-muted)}
 .vb-stats{display:grid;grid-template-columns:1fr 1fr;gap:25px}.vb-stats table{width:100%;border-collapse:collapse;align-self:start}.vb-stats :is(th,td){font-size:13px;padding:5px 4px;border-width:0 0 1px;text-align:left}.vb-stats :is(th,td):last-child{text-align:right}.vb-stats dl:first-child{border-right:1px solid var(--edge);padding-right:18px}
 .vb-action{display:block;text-align:center;border:1px solid var(--edge);border-radius:8px;padding:10px;color:var(--sd-ink);margin:8px 0;font-weight:600}.vb-action:first-of-type{border-color:var(--green);color:var(--green);background:var(--jsoft)}.vb-textlink{display:block;text-align:center;margin:12px 0 0}.vb-history{margin-top:16px;overflow:auto}.vb-history summary{cursor:pointer;font-weight:600}
-@media(max-width:1200px){.vb-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.vb-kpis{gap:8px}.vb-kpi{padding:10px;gap:6px}.vb-kpi .sd-icon{padding:4px}.vb-layout{grid-template-columns:158px minmax(0,1fr)}}
-@media(max-width:850px){.vb-layout{display:block}.vb-sidebar{border:0;padding:8px 0}.vb-sidebar>b{display:none}.vb-sidebar nav{display:flex;overflow:auto}.vb-sidebar a{padding:6px 10px}.vb-content{padding:10px 0}.vb-grid{grid-template-columns:minmax(0,1fr)}.vb-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.vb-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:510px){.vb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.vb-kpi{min-height:75px}.vb-kpi strong{font-size:21px}.vb-heading h1{font-size:23px}.vb-heading .sd-icon{width:28px}.vb-stats{display:block}.vb-stats dl:first-child{border:0;padding:0}.vb-controls{gap:9px}.vb-ranges{margin-left:0}.vb-sidebar a .sd-icon{display:none}}
+@media(max-width:1200px){.vb-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.vb-kpis{gap:8px}.vb-kpi{padding:10px;gap:6px}.vb-kpi .sd-icon{padding:4px}}
+@media(max-width:850px){.vb-grid{grid-template-columns:minmax(0,1fr)}.vb-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.vb-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:510px){.vb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.vb-kpi{min-height:75px}.vb-kpi strong{font-size:21px}.vb-heading h1{font-size:23px}.vb-heading .sd-icon{width:28px}.vb-stats{display:block}.vb-stats dl:first-child{border:0;padding:0}.vb-controls{gap:9px}.vb-ranges{margin-left:0}}
 """

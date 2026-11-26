@@ -5,7 +5,7 @@
   --muted: #475a71;
   --accent: #2458aa;
   color: var(--pink);
-  margin: 24px 0;
+  margin: 0 0 24px;
   font-family: system-ui, sans-serif;
 }
 .paper h1 {
@@ -33,11 +33,27 @@
   letter-spacing: 0.07em;
   color: #8b5200;
 }
-.pnav {
+.paper .pnav {
+  flex-wrap: nowrap;
   justify-content: flex-start;
-  gap: 4px;
-  border-bottom: 1px solid var(--pline);
-  padding: 10px 0;
+  gap: 6px;
+  border-bottom: 1px solid var(--stroke);
+  padding: 0;
+}
+.paper .pnav button {
+  flex: none;
+  padding: 12px 10px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sub);
+  font: 600 14px system-ui;
+}
+.paper .pnav button[aria-current], .paper .pnav button:hover {
+  background: transparent;
+  border-bottom-color: var(--signal);
+  color: var(--signal);
 }
 .paper button,
 .paper select,

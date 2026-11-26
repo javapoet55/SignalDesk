@@ -759,7 +759,7 @@ def _keep_options(current: str, top_n: int) -> str:
                    f"{html.escape(t)}</option>" for v, t in opts)
 
 
-TABS = (("scans", "/", "Scans"), ("strategies", "/strategies", "Strategies"), ("journal", "/journal", "Journal"),
+TABS = (("scans", "/", "Scans"), ("strategies", "/strategies", "Strategies"), ("vectorbt", "/vectorbt", "VectorBT PRO"), ("journal", "/journal", "Journal"),
         ("report", "/latest/report.html", "Latest report"))
 TABS = TABS + (("paper", "/paper", "Paper Trading"), ("notes", "/notes", "Trading Notes"), ("tradingview", "/tradingview", "TradingView"), ("notebook", "/notebook", "Notes"))
 
@@ -1372,8 +1372,7 @@ def render_strategies(app: App) -> str:
     completed = [record for record in archive if record.get("status") == "ok"]
     signals = sum(count for record in completed for key, count in record.get("counts", {}).items()
                   if key in BUY_STATUSES or key == "rows")
-    out.extend([design.overview((len(strategies), len(upcoming), len(completed), signals)),
-                studio.subnav(), "<div class='studio-page' data-view='configure'>"])
+    out.extend([studio.subnav(), design.overview((len(strategies), len(upcoming), len(completed), signals)), "<div class='studio-page' data-view='configure'>"])
     if st.price_source == "massive" and st.client is None:
         out.append("<div class='warn'>MASSIVE_API_KEY is not set, so there are no prices to run strategies on.</div>")
     if st.price_source == "finviz" and st.finviz is None:
@@ -3074,7 +3073,7 @@ class Handler(BaseHTTPRequestHandler):
     def _html(self, status: int, page: str) -> None:
         if self.path.startswith("/strategies/backtests/") and "<main>" in page:
             page = page.replace("</head>", _THEME_INIT + "</head>", 1).replace(
-                "<main>", "<main>" + render_tabs("strategies") + studio.subnav("backtests"), 1)
+                "<main>", "<main>" + render_tabs("vectorbt") + studio.subnav("backtests"), 1)
         self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def _journal_get(self, path: str, query: str) -> None:
