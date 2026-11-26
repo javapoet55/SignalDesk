@@ -82,6 +82,17 @@ class BrowserTests(unittest.TestCase):
                 "button", name="Execute paper trade and authorize conditional sale"
             ).click()
             page.get_by_text("Simulated", exact=True).first.wait_for()
+            page.locator("#tabs").get_by_role("button", name="Order History").click()
+            fills = page.locator(".pbox").filter(has=page.get_by_role("heading", name="Simulated fills"))
+            row = fills.locator("tbody tr").first
+            row.wait_for()
+            fields = dict(zip(fills.locator("th").all_text_contents(), row.locator("td").all_text_contents()))
+            self.assertRegex(fields["Transaction ID"], r"^\d{4}$")
+            self.assertRegex(fields["Signal ID"], r"^\d{4}$")
+            self.assertEqual(fields["Filled shares"], "2.00")
+            self.assertEqual(fields["Requested shares"], "2.00")
+            outcomes = page.locator(".pbox").filter(has=page.get_by_role("heading", name="Order outcomes"))
+            self.assertEqual(outcomes.locator("tbody td").first.inner_text(), fields["Signal ID"])
             page.locator("#tabs").get_by_role("button", name="Signal Manager").click()
             page.get_by_text("Armed", exact=True).wait_for()
             page.get_by_role("button", name="Cancel exit").click()

@@ -43,6 +43,7 @@ const cash = (v) =>
   v == null
     ? "N/A"
     : Number(v).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const shares = (v) => v == null ? "N/A" : Number(v).toFixed(2);
 const date = (v) => (v ? new Date(v * 1000).toLocaleString() : "N/A");
 const box = (title, body) =>
   '<section class="pbox"><h2>' + esc(title) + "</h2>" + body + "</section>";
@@ -155,19 +156,19 @@ const posCols = [
 const fillCols = [
   ["symbol", "Symbol"],
   ["side", "Side"],
-  ["qty", "Filled shares"],
+  ["qty", "Filled shares", shares],
   ["price", "Fill price", cash],
   ["notional", "Value", cash],
   ["fee", "Fee", cash],
   ["realized", "Realized P&L", cash],
   ["created", "Executed", date],
   ["source", "Source"],
-  ["id", "Transaction ID"],
-  ["signal", "Signal ID"],
+  ["transaction_ref", "Transaction ID"],
+  ["signal_ref", "Signal ID"],
   [
     "requested",
     "Requested shares",
-    (_, r) => (r.preview ? JSON.parse(r.preview).qty : r.qty),
+    (_, r) => shares(r.preview ? JSON.parse(r.preview).qty : r.qty),
   ],
   ["slippage", "Simulated slippage", () => cash(0)],
   ["signal_status", "Status", (v) => v || "Simulated"],
@@ -392,7 +393,7 @@ async function draw() {
       box(
         "Order outcomes",
         table(orders, [
-          ["id", "Signal / order ID"],
+          ["signal_ref", "Signal / order ID"],
           ["status", "Status"],
           ["reason", "Reason"],
           ["created", "Processed", date],
@@ -799,7 +800,7 @@ function signalTable(rs, actions = false) {
       ["created", "Created", date],
       ["processed", "Processed", date],
       ["reason", "Outcome"],
-      ["id", "Signal ID"],
+      ["signal_ref", "Signal ID"],
       ["origin", "Signal source", () => "Manual"],
       ["source", "Market data"],
     ],

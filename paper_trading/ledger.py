@@ -695,6 +695,13 @@ class Ledger:
                     "r.id" if kind == "orders" else "r.signal"
                 )
             alias = "r" if kind == "signals" else "s"
+            signal_ref = f"printf('%04d', {alias}.rowid)"
+            select += f", {signal_ref} AS signal_ref"
+            references = [signal_ref]
+            if kind == "transactions":
+                transaction_ref = "printf('%04d', r.rowid)"
+                select += f", {transaction_ref} AS transaction_ref"
+                references.append(transaction_ref)
             ticker = f"json_extract({alias}.ticket,'$.symbol')"
             if kind != "signals":
                 select += f", {alias}.ticket, {alias}.preview, {alias}.status AS signal_status"
@@ -703,9 +710,10 @@ class Ledger:
                 params.append(symbol(filters["symbol"]))
             if filters.get("query"):
                 clauses.append(
-                    f"(instr(lower({alias}.ticket),lower(?))>0 OR instr(lower({alias}.status),lower(?))>0 OR instr({alias}.id,?)>0)"
+                    f"(instr(lower({alias}.ticket),lower(?))>0 OR instr(lower({alias}.status),lower(?))>0 OR instr({alias}.id,?)>0 OR "
+                    + " OR ".join(ref + "=?" for ref in references) + ")"
                 )
-                params.extend([short(filters["query"], 200)] * 3)
+                params.extend([short(filters["query"], 200)] * (3 + len(references)))
         sort_by = {
             "created": "r.created",
             "symbol": ticker,
