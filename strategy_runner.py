@@ -548,7 +548,10 @@ def main(argv=None) -> int:
             return replay_daily(a)
         return cmd_check(Path(a.strategy)) if a.cmd == "check" else cmd_run(a)
     except Exception:
+        # Flush what the strategy printed first, so the error is the last thing in the log.
+        sys.stdout.flush()
         traceback.print_exc()
+        sys.stderr.flush()
         return 3
 
 

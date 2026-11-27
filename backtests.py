@@ -90,18 +90,28 @@ def daily_high(bar):
 
 
 def replay_failure(log, mem_mb):
-    """Say why a replay stopped, from the last line the strategy process wrote.
+    """Say why a replay stopped, from the exception the strategy process reported.
 
     The log lives in a temporary folder that is deleted with the replay, so this message is the
-    only place the reason survives."""
+    only place the reason survives. A strategy may print a line for every ticker, and that output
+    can land after the error in the log, so the last line of the log is not a reliable reason:
+    look for the last Python traceback instead."""
     generic = "Historical Python replay failed or timed out. Try fewer sessions or archived signals."
     try:
         with open(log, "rb") as handle:
-            handle.seek(max(0, os.path.getsize(log) - 4000))
-            lines = [line.strip() for line in handle.read().decode("utf-8", errors="replace").splitlines()]
+            handle.seek(max(0, os.path.getsize(log) - 200_000))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
     except OSError:
         return generic
-    last = next((line for line in reversed(lines) if line), "")
+    error = re.compile(r"[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)\b(?::.*)?$")
+    last = ""
+    # Buffered strategy output can be cut off mid-line by the traceback, so the header may not start a line.
+    headers = [i for i, line in enumerate(lines) if "Traceback (most recent call last)" in line]
+    if headers:
+        # The exception line is the first unindented line after the traceback's frames.
+        last = next((line.strip() for line in lines[headers[-1] + 1:] if line and not line[0].isspace()), "")
+    if not last:
+        last = next((line.strip() for line in reversed(lines) if error.match(line)), "")
     if not last:
         return generic
     if last.startswith("MemoryError"):
