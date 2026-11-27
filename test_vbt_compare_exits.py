@@ -2,6 +2,7 @@
 
 import copy
 import os
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -47,12 +48,15 @@ class Parsing(unittest.TestCase):
 class Submission(unittest.TestCase):
     """The replay is prepared once and each pairing is sent as its own job with untouched copies of the data."""
 
-    def submit(self, fail_at=None, **fields):
+    def submit(self, fail_at=None, fail_replay=None, **fields):
         sent, prepared = [], []
 
         def dataset(*args, **kwargs):
             prepared.append((args, kwargs))
+            if fail_replay is not None and len(prepared) > fail_replay:
+                raise ValueError("This strategy only works on daily price bars.")
             return dict(strategy="s", run="r", symbol="ABC", holds=args[3], fee_bps=args[4], source="Historical Python replay",
+                        **({"candle_days": kwargs["candle_days"]} if "candle_days" in kwargs else {}),
                         bars=[dict(day=d, open=1, close=1, signal=False) for d in DAYS], observed_days=len(DAYS))
 
         def service(path, data=None):
@@ -66,8 +70,8 @@ class Submission(unittest.TestCase):
                 return SimpleNamespace(is_symlink=lambda: False)
 
         st = SimpleNamespace(results_dir=Root())
-        form = dict(rid="2026-10-01_000000_daily", symbols="ABC", holds="5", commission="0.1", start="2026-10-01",
-                    end="2026-10-14", **fields)
+        form = dict(dict(rid="2026-10-01_000000_daily", symbols="ABC", holds="5", commission="0.1", start="2026-10-01",
+                         end="2026-10-14"), **fields)
         with patch.object(backtests, "dataset", dataset), patch.object(backtests, "service", service):
             try:
                 keys = vb.submit_all(st, form, lambda _: [])
@@ -121,6 +125,54 @@ class Submission(unittest.TestCase):
         self.assertEqual(len(sent), 2)
         err, sent, _ = self.submit(fail_at=0, profit_target_pct="2", stop_loss_pct="3,5,10")
         self.assertNotIn("submitted before", str(err))
+
+
+class BarSizes(Submission):
+    """Compare bars: one replay per bar size, then every target and stop pairing on each."""
+
+    def test_parsing(self):
+        bars = backtests.compare_bars
+        self.assertEqual([bars(v) for v in (None, "", " , ", "1", "1, 2,4", "4,2,4,1,")], [[], [], [], [1], [1, 2, 4], [4, 2, 1]])
+        for bad in ("0", "6", "1,x", "1.5"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "price bars of 1–5 trading days"):
+                bars(bad)
+
+    def test_one_replay_per_bar_size_and_every_pairing_on_each(self):
+        keys, sent, prepared = self.submit(compare_bars="1, 2, 4", profit_target_pct="3,4", stop_loss_pct="5")
+        self.assertEqual(keys, KEYS[:6])
+        self.assertEqual([kwargs.get("candle_days", 1) for _, kwargs in prepared], [1, 2, 4])
+        self.assertEqual([(d.get("candle_days", 1), d["profit_target_pct"], d["stop_loss_pct"]) for d in sent],
+                         [(1, 3.0, 5.0), (1, 4.0, 5.0), (2, 3.0, 5.0), (2, 4.0, 5.0), (4, 3.0, 5.0), (4, 4.0, 5.0)])
+
+    def test_bars_alone_and_the_list_replaces_the_dropdown(self):
+        keys, sent, prepared = self.submit(compare_bars="1,4", candle_days="3")
+        self.assertEqual(len(keys), 2)
+        self.assertEqual([kwargs.get("candle_days", 1) for _, kwargs in prepared], [1, 4])
+        self.assertEqual([(d["profit_target_pct"], d["stop_loss_pct"]) for d in sent], [(None, None)] * 2)
+        # Blank list: the dropdown still decides, exactly as before.
+        _, sent, prepared = self.submit(compare_bars="", candle_days="3")
+        self.assertEqual((len(sent), prepared[0][1]["candle_days"]), (1, 3))
+        _, _, prepared = self.submit(compare_bars=" ")
+        self.assertNotIn("candle_days", prepared[0][1])
+
+    def test_limits_and_date_range(self):
+        err, sent, prepared = self.submit(compare_bars="1,2,3", profit_target_pct="2,3,4,5", stop_loss_pct="3,5")
+        self.assertRegex(str(err), r"3 bar sizes with 8 profit target and stop loss pairings is 24 backtests\. Compare at most 20")
+        self.assertEqual((sent, prepared), ([], []))
+        err, sent, prepared = self.submit(compare_bars="1,2", start="", end="")
+        self.assertRegex(str(err), "Choose a date range to use 2–5 day price bars")
+        self.assertEqual((sent, prepared), ([], []))
+        err, _, prepared = self.submit(compare_bars="1,7")
+        self.assertRegex(str(err), "price bars of 1–5 trading days")
+        self.assertEqual(prepared, [])
+
+    def test_a_bar_size_the_strategy_cannot_use_reports_what_was_already_submitted(self):
+        err, sent, prepared = self.submit(fail_replay=1, compare_bars="1,2", profit_target_pct="3", stop_loss_pct="5,8")
+        self.assertRegex(str(err), r"2-day bars: This strategy only works on daily price bars\. 2 of 4 backtests were submitted")
+        self.assertEqual(len(sent), 2)
+        err, sent, _ = self.submit(fail_replay=0, compare_bars="2,4")
+        self.assertEqual(str(err), "This strategy only works on daily price bars.")
+        self.assertEqual(sent, [])
 
 
 class Links(unittest.TestCase):
@@ -190,6 +242,19 @@ class Table(EngineResults):
         self.assertIn("Failed<small>Missing a daily bar &lt;b&gt;</small>", table)
         self.assertNotIn("<b>", table.replace("<b class=vb-badge>", ""))
         self.assertIn("<th scope='row'>—</th><td>—</td>" + "<td>—</td>" * 5 + "<td>Not found</td><td>—</td>", table)
+
+    def test_bar_size_column_appears_only_when_bar_sizes_differ(self):
+        rows = self.rows()
+        same = vb.compare_table(rows, KEYS[:5])
+        self.assertNotIn("Price bars", same)
+        rows[1]["info"] = dict(rows[1]["info"], candle_days=4)
+        table = vb.compare_table(rows, KEYS[:5])
+        self.assertIn("<thead><tr><th>Price bars</th><th>Profit target</th>", table)
+        self.assertIn("<th scope='row'>Daily</th><td>2%</td><td>10%</td>", table)
+        self.assertIn("<tr class=vb-best><th scope='row'>4-day</th><td>2%</td><td>None</td>", table)
+        self.assertIn("<th scope='row'>—</th><td>—</td><td>—</td>", table)          # the job that was not found
+        self.assertEqual(table.count("<th scope='row'>"), 5)
+        self.assertEqual([vb.bar_label(v) for v in (None, 1, "1", 2, 5)], ["Daily", "Daily", "Daily", "2-day", "5-day"])
 
     def test_summary(self):
         summary = vb.compare_summary(self.rows())
@@ -264,7 +329,13 @@ class Form(unittest.TestCase):
         self.assertIn("value='3,5,10'", html)
         self.assertNotIn("type='number'", html)
         self.assertIn("id='vb-compare-help'", html)
-        import re
+        self.assertIn("<label>Compare bars<input name='compare_bars' inputmode='numeric'", html)
+        self.assertIn("value='1, 2, 4'", vb.controls([], "", {}, [], True, dict(compare_bars="1, 2, 4")))
+        bar_pattern = re.search(r"name='compare_bars' inputmode='numeric' pattern='([^']+)'", html).group(1)
+        for good in ("1", "1,2,4", " 1, 2 , 5 ", "2,4,"):
+            self.assertTrue(re.fullmatch(bar_pattern, good), good)
+        for bad in ("0", "6", "1;2", "12", "x", ",1"):
+            self.assertFalse(re.fullmatch(bar_pattern, bad), bad)
         pattern = re.search(r"name='stop_loss_pct' inputmode='decimal' pattern='([^']+)'", html).group(1)
         for good in ("2", "2.5", " 2, 4 ", ".5,10", "5,2,3,4,", "2, 4 , "):
             self.assertTrue(re.fullmatch(pattern, good), good)
@@ -328,7 +399,17 @@ class Browser(unittest.TestCase):
             page.locator("[name=profit_target_pct]").fill("2")
             self.assertIn("Run Backtest", button.inner_text())
             self.assertTrue(help_text.is_hidden())
+            page.locator("[name=compare_bars]").fill("1, 2, 4")          # bar sizes multiply the count
+            self.assertIn("Compare 3 Backtests", button.inner_text())
+            self.assertIn("Runs 3 backtests, one for each bar size, and shows them side by side.", help_text.inner_text())
+            self.assertTrue(page.locator("[name=start]").evaluate("field => field.required"))   # longer bars need dates
             page.locator("[name=stop_loss_pct]").fill("5, 10")
+            self.assertIn("Compare 6 Backtests", button.inner_text())
+            self.assertIn("one for each bar size, profit target and stop loss combination", help_text.inner_text())
+            page.locator("[name=compare_bars]").fill("7")
+            self.assertFalse(page.locator("[name=compare_bars]").evaluate("field => field.checkValidity()"))
+            page.locator("[name=compare_bars]").fill("")
+            self.assertFalse(page.locator("[name=start]").evaluate("field => field.required"))
             # The fixture has no saved strategy runs, which disables the button; the server is patched, so enable it.
             page.evaluate("document.querySelector('.vb-run').disabled=false;"
                           "document.querySelector('[name=rid]').innerHTML='<option value=r selected>r</option>'")
