@@ -2894,6 +2894,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/vectorbt":
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
                 return vb_workspace.page(self, query)
+            if path == "/vectorbt/compare":
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
+                return vb_workspace.compare(self, query)
             if path == "/strategies/backtests":
                 jobs = []
                 message = "VectorBT PRO is unavailable. The backtest service is not configured."
@@ -3050,8 +3053,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if not (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN")):
                     raise ValueError("VectorBT PRO is not configured.")
-                key = vb_workspace.submit(self.app.strategies, fields, signal_tickers)
-                return self._redirect("/vectorbt?job=" + key)
+                keys = vb_workspace.submit_all(self.app.strategies, fields, signal_tickers)
+                if len(keys) > 1:  # Several profit targets or stop losses: show them side by side.
+                    return self._redirect("/vectorbt/compare?jobs=" + ",".join(keys))
+                return self._redirect("/vectorbt?job=" + keys[0])
             except (ValueError, OSError) as err:
                 return vb_workspace.page(self, {}, fields, err)
         if path == "/strategies/copilot":

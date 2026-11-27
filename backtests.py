@@ -74,6 +74,32 @@ def stop_loss(value):
     return stop
 
 
+MAX_COMPARISONS = 12  # Profit target and stop loss pairings tested by one submit.
+
+
+def percent_values(value, parse):
+    """One percentage, or several separated by commas to compare. Blank gives an empty list."""
+    values = []
+    for part in (value or "").split(","):
+        number = parse(part)
+        if number is not None and number not in values:
+            values.append(number)
+    return values
+
+
+def exit_pairs(targets, stops):
+    """Every profit target paired with every stop loss, in the order entered."""
+    if stops and not targets:
+        raise ValueError("Enter a profit target to use a stop loss.")
+    pairs = [(target, stop) for target in targets for stop in (stops or [None])] or [(None, None)]
+    if len(pairs) > MAX_COMPARISONS:
+        raise ValueError(
+            f"{len(targets)} profit targets with {len(stops)} stop losses is {len(pairs)} backtests. "
+            f"Compare at most {MAX_COMPARISONS} at a time."
+        )
+    return pairs
+
+
 def daily_low(bar):
     value, prices = bar.get("l"), [bar.get("o"), bar.get("c")]
     if (isinstance(value, (int, float)) and math.isfinite(value) and value > 0

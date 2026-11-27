@@ -1,5 +1,6 @@
 """VectorBT research workspace for the portal's saved strategy runs and jobs."""
 
+import copy
 import csv
 import io
 import re
@@ -42,12 +43,22 @@ def eligible(st):
 
 
 def submit(st, fields, buys):
+    """Submit one backtest and return its job ID."""
+    return submit_all(st, fields, buys)[0]
+
+
+def submit_all(st, fields, buys):
+    """Submit one backtest per profit target and stop loss pairing. Returns the job IDs in the order entered.
+
+    The price data and signals are prepared once and reused, so every pairing is tested on identical inputs.
+    """
     started = time.monotonic()
     rid = fields.get("rid", "")
-    target = backtests.profit_target(fields.get("profit_target_pct"))
-    stop = backtests.stop_loss(fields.get("stop_loss_pct"))
-    if stop and not target:
-        raise ValueError("Enter a profit target to use a stop loss.")
+    pairs = backtests.exit_pairs(
+        backtests.percent_values(fields.get("profit_target_pct"), backtests.profit_target),
+        backtests.percent_values(fields.get("stop_loss_pct"), backtests.stop_loss),
+    )
+    target = pairs[0][0]
     try:
         fee = float(fields.get("commission") or "0") * 100  # Portal percent to engine basis points.
     except ValueError:
@@ -104,9 +115,20 @@ def submit(st, fields, buys):
             interval=(start, end) if start else None,
             **({"candle_days": bar_days} if bar_days > 1 else {}),
         )
-    data["profit_target_pct"] = target
-    data["stop_loss_pct"] = stop
-    return backtests.submit_job(data, started)
+    keys = []
+    for target, stop in pairs:
+        request = copy.deepcopy(data) if len(pairs) > 1 else data
+        request["profit_target_pct"] = target
+        request["stop_loss_pct"] = stop
+        try:
+            keys.append(backtests.submit_job(request, started))
+        except ValueError as err:
+            if not keys:
+                raise
+            raise ValueError(
+                f"{err} {len(keys)} of {len(pairs)} backtests were submitted before this; they are in the backtest history."
+            ) from err
+    return keys
 
 
 def report_data(job, hold):
@@ -527,6 +549,10 @@ def report(job, key, m, window):
     )
 
 
+# One percentage or a comma-separated list, as an HTML pattern. The server does the real validation.
+PERCENT_LIST = r"\s*\d*\.?\d+\s*(,\s*\d*\.?\d+\s*)*"
+
+
 def controls(runs, rid, info, symbols, enabled, fields):
     opts = "".join(
         f"<option value='{esc(r['id'])}'"
@@ -576,10 +602,12 @@ def controls(runs, rid, info, symbols, enabled, fields):
         f"<label>Price bars<select name='candle_days' aria-label='Price bars' aria-describedby='vb-bar-help' title='Bar size used to calculate the signals. "
         f"Longer bars need a date range and a strategy that supports them. Trades are always priced on daily bars.'>{bar_options}</select></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
-        f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
-        "title='Buy at the signal close. Sell on the first target touch within the maximum hold, or at the close of its last trading day.'></label>"
-        f"<label>Stop loss (%)<input name='stop_loss_pct' type='number' min='0' max='99.99' step='any' value='{esc(stop)}' placeholder='Optional' "
-        "title='Used with a profit target. Sell when the price falls this far below entry. If one day touches both the stop and the target, the stop counts first.'></label>"
+        f"<label>Profit target (%)<input name='profit_target_pct' inputmode='decimal' pattern='{PERCENT_LIST}' value='{esc(target)}' placeholder='Optional' "
+        "title='Buy at the signal close. Sell on the first target touch within the maximum hold, or at the close of its last trading day. "
+        "To compare several targets, separate them with commas, such as 2, 4.'></label>"
+        f"<label>Stop loss (%)<input name='stop_loss_pct' inputmode='decimal' pattern='{PERCENT_LIST}' value='{esc(stop)}' placeholder='Optional' "
+        "title='Used with a profit target. Sell when the price falls this far below entry. If one day touches both the stop and the target, the stop counts first. "
+        "To compare several stops, separate them with commas, such as 3, 5, 10.'></label>"
         "<details class='vb-dates'><summary>Date Range<span>"
         + (esc(start) + " – " + esc(end) if start and end else "Saved signal dates")
         + " ▾</span></summary>"
@@ -595,7 +623,8 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "</div></details>"
         "<button class='vb-run' type='submit'"
         + ("" if runs and enabled else " disabled")
-        + ">▶　Run Backtest</button><small id='vb-bar-help' hidden aria-live='polite'></small></form>"
+        + ">▶　Run Backtest</button><small id='vb-bar-help' hidden aria-live='polite'></small>"
+        "<small id='vb-compare-help' hidden aria-live='polite'></small></form>"
     )
 
 
@@ -656,6 +685,7 @@ def page(host, query, fields=None, error=""):
     hold = query.get("hold", "")
     m = report_data(job, hold)
     info = dict(job["inputs"]) if job else {}
+    siblings = compare_keys(query.get("compare", ""))
     if "trades" in query:
         group = query["trades"]
         if not key or not m or group not in TRADE_GROUPS:
@@ -695,6 +725,8 @@ def page(host, query, fields=None, error=""):
         f"<p class='vb-capital'>Initial capital <strong>{fmt(CAPITAL, 'usd')[:-3]}</strong></p></div></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
         + (coverage_options(error, fields) if fields and isinstance(error, backtests.ReplayCoverageError) else "")
+        + (f"<p class='vb-back'><a href='{compare_url(siblings)}'>← Back to the comparison of {len(siblings)} backtests</a></p>"
+           if key in siblings else "")
         + form
         + report(job, key, m, query.get("window", "All"))
         + "<details class='vb-card vb-history' id='saved-backtests'><summary>Saved backtest history</summary>"
@@ -708,22 +740,183 @@ def page(host, query, fields=None, error=""):
         + "</details></div></main><script>"
         + f"const VB_PENDING={'true' if job and not job.get('error') and not m else 'false'};"
         + f"const VB_POLL_MS={int(POLL_SECONDS * 1000)},VB_POLL_LIMIT={POLL_LIMIT};"
+        + f"const VB_COMPARE_LIMIT={backtests.MAX_COMPARISONS};"
         + SCRIPT
         + "</script></body></html>"
     )
     return host._html(400 if fields and error else 200, html)
 
 
+def compare_keys(text):
+    """The job IDs in a comparison link, or an empty list when the link is not a valid comparison."""
+    keys = list(dict.fromkeys(part for part in (text or "").split(",") if part))
+    if not 2 <= len(keys) <= backtests.MAX_COMPARISONS or any(not re.fullmatch(r"[a-f0-9-]{36}", key) for key in keys):
+        return []
+    return keys
+
+
+def compare_url(keys):
+    return "/vectorbt/compare?" + esc(urlencode({"jobs": ",".join(keys)}))
+
+
+def percent_label(value):
+    return "None" if value is None else format(float(value), "g") + "%"
+
+
+def compare_rows(keys, fetch):
+    """One summary per job: its exit settings, status and the headline figures of a finished run."""
+    rows = []
+    for key in keys:
+        row = dict(key=key, status="Not found", m={}, info={}, error="")
+        try:
+            job = fetch(key)
+        except backtests.JobNotFound:
+            job = None
+        if job:
+            row["info"] = info = job.get("inputs") or {}
+            row["error"] = job.get("error") or ""
+            row["m"] = report_data(job, "") if job.get("result") and not row["error"] else {}
+            row["status"] = "Failed" if row["error"] else "Completed" if row["m"] else "Queued or running"
+        rows.append(row)
+    return rows
+
+
+def best_row(rows):
+    """The finished run with the highest average profit per trade, or None when no run has trades."""
+    scored = [row for row in rows if row["m"].get("trades") and row["m"].get("expectancy") is not None]
+    return max(scored, key=lambda row: row["m"]["expectancy"])["key"] if scored else None
+
+
+def compare_table(rows, keys):
+    best = best_row(rows)
+    body = []
+    for row in rows:
+        m, info = row["m"], row["info"]
+        factor = m.get("profit_factor")
+        figures = (
+            [
+                (fmt(m.get("total"), "pct"), m.get("total")),
+                (fmt(m.get("rate"), "pct"), None),
+                (str(m.get("trades", "—")), None),
+                ("∞" if factor == float("inf") else fmt(factor), None),
+                (fmt(m.get("expectancy"), "usd"), m.get("expectancy")),
+            ]
+            if m
+            else [("—", None)] * 5
+        )
+        cells = "".join(
+            "<td" + (f" class='{'down' if tone < 0 else 'up'}'" if tone else "") + f">{esc(text)}</td>" for text, tone in figures
+        )
+        status = esc(row["status"]) + (f"<small>{esc(row['error'])}</small>" if row["error"] else "")
+        link = (
+            f"<a href='{view_url(row['key'], compare=','.join(keys))}'>Open report</a>" if row["status"] != "Not found" else "—"
+        )
+        body.append(
+            f"<tr{' class=vb-best' if row['key'] == best else ''}>"
+            f"<th scope='row'>{esc(percent_label(info.get('profit_target_pct'))) if info else '—'}</th>"
+            f"<td>{esc(percent_label(info.get('stop_loss_pct'))) if info else '—'}</td>{cells}"
+            f"<td>{status}{'<b class=vb-badge>Best expectancy</b>' if row['key'] == best else ''}</td><td>{link}</td></tr>"
+        )
+    return (
+        "<table><thead><tr><th>Profit target</th><th>Stop loss</th><th>Total return</th><th>Win rate</th><th>Trades</th>"
+        "<th>Profit factor</th><th>Expectancy per trade</th><th>Status</th><th>Report</th></tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def compare_summary(rows):
+    """What every run in the comparison shares, taken from the first run the service still has."""
+    row = next((r for r in rows if r["m"]), None) or next((r for r in rows if r["info"]), None)
+    if not row:
+        return ""
+    info, m = row["info"], row["m"]
+    names = info.get("symbols") or list(info.get("prices", {}))
+    symbols = f"{len(names)} symbols" if len(names) > 1 else info.get("symbol", "—")
+    facts = [("Strategy", str(info.get("strategy", "—")).replace("_", " ")), ("Symbols", symbols)]
+    if m:
+        facts += [("Dates", f"{m['start']} – {m['end']}"), ("Maximum hold", f"{m['hold']} trading days")]
+    facts.append(("Initial capital", fmt(CAPITAL, "usd")[:-3]))
+    return "<dl class='vb-compare-facts'>" + "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in facts) + "</dl>"
+
+
+def compare(host, query):
+    import os
+
+    import server
+
+    keys = compare_keys(query.get("jobs", ""))
+    if not keys:
+        return host._text(400, f"Choose 2 to {backtests.MAX_COMPARISONS} backtests to compare.")
+    rows, error = [], ""
+    if os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
+        try:
+            rows = compare_rows(keys, lambda key: backtests.service("/jobs/" + key))
+        except ValueError:
+            error = "Backtest service unavailable. Refresh to retry."
+    else:
+        error = "VectorBT PRO is unavailable. The backtest service is not configured."
+    pending = sum(row["status"] == "Queued or running" for row in rows)
+    done = sum(row["status"] == "Completed" for row in rows)
+    if pending:
+        note = (f"{done} of {len(rows)} backtests finished. This page refreshes every {POLL_SECONDS} seconds "
+                "until the rest are done.")
+    elif best_row(rows):
+        note = ("The highlighted row has the highest expectancy, the average profit or loss per trade after fees. "
+                "A higher win rate alone does not mean a higher profit.")
+    else:
+        note = "No backtest in this comparison finished with trades."
+    html = (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Compare backtests · Finviz Agent</title>"
+        + server._THEME_INIT
+        + f"<style>{server._CSS}{server._JOURNAL_DESIGN_CSS}</style></head><body class='journal-app vb-app'><main>"
+        + server.render_tabs("vectorbt")
+        + f"<style>{CSS}</style>"
+        f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>Compare profit targets and stop losses</h1>"
+        "<p>The same strategy, symbols, dates and prices, with a different exit rule in each row.</p></div>"
+        "<div class='vb-heading-tools'><a class='vb-history-link' href='/vectorbt'>New backtest</a>"
+        "<a class='vb-history-link' href='/strategies/backtests'>Backtest history</a></div></header>"
+        + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
+        + (
+            f"<section class='vb-card vb-compare'>{compare_summary(rows)}<p class='vb-compare-note' role='status'>{esc(note)}</p>"
+            f"<div class='vb-compare-scroll'>{compare_table(rows, keys)}</div>"
+            "<p class='vb-compare-foot'>When one day touches both the stop and the target, the stop counts first, so tight stops "
+            "can look worse here than in live trading. Bookmark this page to return to the comparison; each run is also saved in the "
+            "backtest history.</p></section>"
+            if rows
+            else ""
+        )
+        + "</div></main><script>"
+        + f"const VB_PENDING={'true' if pending else 'false'},VB_POLL_MS={int(POLL_SECONDS * 1000)},VB_POLL_LIMIT={POLL_LIMIT};"
+        + COMPARE_SCRIPT
+        + "</script></body></html>"
+    )
+    return host._html(200, html)
+
+
+COMPARE_SCRIPT = """
+window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
+const here=new URL(location.href), polls=Number(here.searchParams.get('poll'))||0;
+if(VB_PENDING){
+  if(polls<VB_POLL_LIMIT) setTimeout(()=>{here.searchParams.set('poll',polls+1);location.replace(here)},VB_POLL_MS);
+}else if(here.searchParams.has('poll')){
+  here.searchParams.delete('poll');history.replaceState(null,'',here);
+}
+"""
+
 SCRIPT = """
 const form=document.querySelector('.vb-controls');
 form.addEventListener('input',()=>document.querySelector('.vb-recovery')?.remove(),{once:true});
 const holdField=form.elements.holds, targetField=form.elements.profit_target_pct;
-let holdEdited=false, targetWasActive=Number(targetField.value)>0;
+// The target box holds one percentage or a comma-separated list to compare.
+const hasTarget=()=>/[1-9]/.test(targetField.value);
+let holdEdited=false, targetWasActive=hasTarget();
 holdField.addEventListener('input',()=>holdEdited=true);
 function syncHold(){
   // With a profit target the hold is one editable maximum (1-60 days). Turning a target on suggests
   // the default of 7 unless the hold was typed by hand; a list such as "1,5,10" never applies.
-  const active=Number(targetField.value)>0;
+  const active=hasTarget();
   if(active && ((!targetWasActive && !holdEdited) || !/^\s*\d+\s*$/.test(holdField.value))) holdField.value='7';
   targetWasActive=active;
   document.querySelector('#vb-hold-label').textContent=active?'Maximum hold (trading days)':'Hold (trading days)';
@@ -731,6 +924,18 @@ function syncHold(){
 }
 targetField.addEventListener('input',syncHold);
 syncHold();
+// Several targets or stops make one backtest per pairing. Say how many before the click.
+const stopField=form.elements.stop_loss_pct, runButton=form.querySelector('.vb-run'), compareHelp=document.querySelector('#vb-compare-help');
+const entries=field=>new Set(field.value.split(',').map(v=>Number(v)).filter(v=>v>0)).size;
+function syncCompare(){
+  const targets=entries(targetField), runs=targets*Math.max(entries(stopField),1);
+  runButton.textContent=runs>1?`▶　Compare ${runs} Backtests`:'▶　Run Backtest';
+  compareHelp.hidden=runs<2;
+  compareHelp.textContent=runs>VB_COMPARE_LIMIT?`That is ${runs} backtests. Compare at most ${VB_COMPARE_LIMIT} at a time.`
+    :runs>1?`Runs ${runs} backtests on the same signals and prices, one for each profit target and stop loss pairing, and shows them side by side.`:'';
+}
+targetField.addEventListener('input',syncCompare);stopField.addEventListener('input',syncCompare);
+syncCompare();
 const dates=form.querySelector('.vb-dates'), caption=dates.querySelector('summary span');
 const {start,end}=form.elements;
 const barField=form.elements.candle_days, barHelp=document.querySelector('#vb-bar-help');
@@ -830,6 +1035,10 @@ CSS = """
 .vb-grid dl{margin:0}.vb-grid dl div{display:flex;justify-content:space-between;gap:7px;border-top:1px solid var(--edge);padding:4px 0;font-size:13px}.vb-grid dd{margin:0;text-align:right;font-weight:550;overflow-wrap:anywhere}.vb-grid dt{color:var(--sd-muted)}
 .vb-stats{display:grid;grid-template-columns:1fr 1fr;gap:25px}.vb-stats table{width:100%;border-collapse:collapse;align-self:start}.vb-stats :is(th,td){font-size:13px;padding:5px 4px;border-width:0 0 1px;text-align:left}.vb-stats :is(th,td):last-child{text-align:right}.vb-stats dl:first-child{border-right:1px solid var(--edge);padding-right:18px}
 .vb-action{display:block;text-align:center;border:1px solid var(--edge);border-radius:8px;padding:10px;color:var(--sd-ink);margin:8px 0;font-weight:600}.vb-action:first-of-type{border-color:var(--green);color:var(--green);background:var(--jsoft)}.vb-textlink{display:block;text-align:center;margin:12px 0 0}.vb-history{margin-top:16px;overflow:auto}.vb-history summary{cursor:pointer;font-weight:600}
+.vb-back{margin:0 0 12px}.vb-compare-facts{display:flex;flex-wrap:wrap;gap:8px 28px;margin:0 0 12px}.vb-compare-facts dt{font-size:12px;color:var(--sd-muted)}.vb-compare-facts dd{margin:0;font-weight:600}
+.vb-compare-note{margin:0 0 12px}.vb-compare-foot{color:var(--sd-muted);font-size:13px;margin:12px 0 0}.vb-compare-scroll{overflow:auto}.vb-compare table{width:100%;border-collapse:collapse}.vb-compare :is(th,td){text-align:right;padding:8px 10px;white-space:nowrap}.vb-compare :is(th,td):first-child{text-align:left}.vb-compare tbody th{font:inherit}
+.vb-compare td small{display:block;white-space:normal;color:var(--sd-muted);max-width:26em;margin-left:auto}.vb-compare tr.vb-best :is(th,td){background:var(--jsoft);font-weight:600}.vb-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:10px;border:1px solid var(--green);color:var(--green);font-size:12px}
+.vb-compare td.up{color:var(--green)}.vb-compare td.down{color:var(--red,#c0392b)}#vb-compare-help{grid-column:1/-1;color:var(--muted)}
 @media(max-width:1200px){.vb-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.vb-kpis{gap:8px}.vb-kpi{padding:10px;gap:6px}.vb-kpi .sd-icon{padding:4px}}
 @media(max-width:850px){.vb-grid{grid-template-columns:minmax(0,1fr)}.vb-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.vb-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.vb-heading{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px}.vb-heading-tools{grid-column:1/-1;margin:0;justify-content:space-between}}
