@@ -10,6 +10,6 @@ class TestPortfolio(unittest.TestCase):
   self.assertIn('<h1>Trades &amp; Portfolio</h1>',p);self.assertIn('>Open Trades</option>',p)
   self.assertIn('<strong>OPEN',p);self.assertNotIn('<strong>CLOSED',p)
   self.assertNotIn("type='hidden' name='status'",p)
-  p=server.render_journal_trades(s.app,{'from':'','to':'','sort':'sold','direction':'asc'})
+  p=server.render_journal_trades(s.app,{'from':'','to':'','status':'','sort':'sold','direction':'asc'})
   self.assertIn('2026-10-25</td>',p);self.assertLess(p.index('<strong>CLOSED'),p.index('<strong>OPEN'))
   self.assertIn('Sort by Sold',p)

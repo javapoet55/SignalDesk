@@ -3189,7 +3189,9 @@ class Handler(BaseHTTPRequestHandler):
             except (jn.JournalError, OSError) as err:
                 app.set_flash("error", str(err), "journal")
                 return self._redirect("/journal/import")
-            return self._redirect("/journal/trades")
+            # Show every trade: the list's default view (open trades, last 40 days) would hide most
+            # of an imported history, which is closed and often older.
+            return self._redirect("/journal/trades?status=&from=&to=")
         form = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"),
                                                           keep_blank_values=True).items()}
         tid = form.get("id", "")
@@ -3857,7 +3859,11 @@ def render_journal(app: App, q: Dict[str, str]) -> str:
 def render_journal_trades(app: App, q: Dict[str, str]) -> str:
     e = html.escape
     q = dict(q)
-    q.setdefault("status", "open")
+    drill = any(q.get(k) for k in ("day", "tag", "setup", "strategy", "symbol", "result")) and "status" not in q
+    q.setdefault("status", "" if drill else "open")
+    if drill:
+        q.setdefault("from", "")
+        q.setdefault("to", "")
     if not q.get("day"):
         today = app.clock().astimezone(app.settings.tz).date()
         q.setdefault("from", (today - dt.timedelta(days=40)).isoformat())

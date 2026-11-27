@@ -235,10 +235,13 @@ class Base(unittest.TestCase):
         self.busy = False
         self.sync = self.make()
 
+    NOW = "2026-10-31T20:00:00"   # the tests' runs are dated Oct 30-31, 2026
+
     def make(self, **env):
         return tvs.TVSync(self.tmp / "tradingview", self.reports, self.results, signal_fn=signal_fn,
                           read_meta=read_meta, pretty_fn=lambda s: s.replace("_", " ").title(),
-                          env={**self.env, **env}, log=self.logs.append, busy_fn=lambda: self.busy)
+                          env={**self.env, **env}, log=self.logs.append, busy_fn=lambda: self.busy,
+                          clock=lambda: dt_ts(self.NOW))
 
     def tearDown(self):
         self.httpd.shutdown()
@@ -559,6 +562,29 @@ class Dated(Base):
                                         "Keep: fmfi Oct 1", "My own list"])
         self.assertFalse(any(h["source"].startswith("2026-10-01") for h in s.state()["history"]))
         self.assertEqual(s.pending(), [])  # deleting an old list never makes it be sent again
+
+    def test_a_run_already_past_the_keep_window_is_not_copied_then_deleted(self):
+        now = [dt_ts("2026-10-20T20:00:00")]
+        s = tvs.TVSync(self.tmp / "tradingview", self.reports, self.results, signal_fn=signal_fn,
+                       read_meta=read_meta, env={**self.env, "TV_KEEP_DAYS": "7"}, log=self.logs.append,
+                       clock=lambda: now[0])
+        self.connect(s)
+        write_scan(self.reports, "2026-10-01_120000", ["AAPL"])           # 19 days old: the agent was off
+        write_result(self.results, "2026-10-01_120500_fmfi", "fmfi", "ok", ["GPN"])
+        self.assertEqual(s.pending(), [])
+        self.assertEqual(s.pending(force=True), [])                       # Sync now does not copy it either
+        before = len(self.fake.calls)
+        self.assertEqual(s.sync(force=True), [])
+        self.assertEqual(self.names(), [])
+        self.assertFalse([c for c in self.fake.calls[before:] if "create" in str(c) or "delete" in str(c)])
+        write_scan(self.reports, "2026-10-20_120000", ["NVDA"])           # a current run is copied as usual
+        s.sync()
+        self.assertEqual(self.names(), ["FinViz Scan · Oct 20 12:00"])
+        # With clean-up off, an old run is still copied: nothing would delete it.
+        keep = tvs.TVSync(self.tmp / "tradingview", self.reports, self.results, signal_fn=signal_fn,
+                          read_meta=read_meta, env={**self.env, "TV_KEEP_DAYS": "0"}, log=self.logs.append,
+                          clock=lambda: now[0])
+        self.assertEqual([j[0] for j in keep.pending()], ["buy:fmfi"])
 
     def test_keep_zero_never_deletes(self):
         now = [dt_ts("2026-10-01T20:00:00")]

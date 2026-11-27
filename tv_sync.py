@@ -743,19 +743,30 @@ class TVSync:
         except ValueError:
             return stamp
 
+    def _too_old(self, source: str) -> bool:
+        """Dated mode: this run is already past TV_KEEP_DAYS, so its list would be deleted by the
+        clean-up at the end of the same sync. Copying it would only spend TradingView calls."""
+        if not (self.dated and self.keep_days):
+            return False
+        made = self._stamp_dt(source)
+        now = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc)
+        return made is not None and made < now - dt.timedelta(days=self.keep_days)
+
     def pending(self, force: bool = False) -> List[Tuple[str, str, List[str], str, str]]:
         """(key, watchlist name, tickers, description, source) for each list that is out of date."""
         s = self.state()
         jobs = []
         if self.sync_scans and not self.busy_fn():
             scan = self.latest_scan()
-            if scan is not None and (force or not self._done(s, "scan", scan.name)):
+            if scan is not None and not self._too_old(scan.name) and (force or not self._done(s, "scan", scan.name)):
                 t = self.scan_tickers(scan)
                 jobs.append(("scan", self.list_name(self.scan_name, scan.name), t,
                              f"FinViz agent · scan {self._when(scan.name)} · {len(t)} tickers", scan.name))
         if self.sync_buys:
             for strat, (rid, d, meta) in sorted(self.latest_results().items()):
                 key = "buy:" + strat
+                if self._too_old(rid):
+                    continue
                 if force or not self._done(s, key, rid):
                     t = clean_tickers(self.signal_fn(d))
                     jobs.append((key, self.list_name((self.buy_prefix + self.pretty_fn(strat))[:170], rid), t,

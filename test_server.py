@@ -744,8 +744,8 @@ class TestJournalWeb(unittest.TestCase):
 
     def test_import_then_stats_calendar_export(self):
         r = self.upload("trades.csv", self.CSV)
-        self.assertEqual((r.status, r.getheader("Location")), (303, "/journal/trades"))
-        _, trades = self.get("/journal/trades")
+        self.assertEqual((r.status, r.getheader("Location")), (303, "/journal/trades?status=&from=&to="))
+        _, trades = self.get("/journal/trades?status=&from=&to=")
         self.assertIn("Imported trades.csv (Generic format): 5 new executions added", trades)
         for sym in ("AAPL", "TSLA", "KO"):
             self.assertIn(f"<strong>{sym}</strong>", trades)

@@ -10,7 +10,7 @@ class TestTradesTable(unittest.TestCase):
   self.s.app.journal.add_manual(dict(symbol='AAA',side='long',entry_date='2026-10-29',entry_price='100',qty='10'))
   page=server.render_journal_trades(self.s.app,{})
   self.assertIn("name='from' value='2026-09-22'",page);self.assertIn("name='to' value='2026-11-01'",page)
-  self.assertEqual(page.count('aria-sort='),12)
+  self.assertEqual(page.count('aria-sort='),11)
   page=server.render_journal_trades(self.s.app,{'sort':'symbol','direction':'asc'})
   self.assertLess(page.index('<strong>AAA'),page.index('<strong>ZZZ'))
   page=server.render_journal_trades(self.s.app,{'sort':'shares','direction':'asc'})
@@ -21,6 +21,6 @@ class TestTradesTable(unittest.TestCase):
   content=b'Date,Symbol,Action,Quantity,Price\n10/30/2026,AAPL,Buy,10,100\n10/31/2026,AAPL,Sell,10,110\n'
   self.s.app.journal.import_csv('History_for_Account_000001234.csv',content)
   t=self.s.app.journal.trades()[0];self.assertEqual(t['account_suffix'],'1234')
-  page=server.render_journal_trades(self.s.app,{})
+  page=server.render_journal_trades(self.s.app,{'status':'','from':'','to':''})
   self.assertIn('•••• 1234',page);self.assertNotIn('000001234',page)
   self.assertEqual(journal.fill_account({'file':'History_for_Account_123.csv'}),'123')

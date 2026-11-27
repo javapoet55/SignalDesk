@@ -17,6 +17,22 @@ from .policy import RateLimit, entitlements, require
 from .research import provenance, securities
 
 ROOT = Path(__file__).parent
+PLAIN_NUMBER = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+
+
+def export_cell(value):
+    """A CSV cell that a spreadsheet will not run as a formula.
+
+    Text starting with = + - or @ gets a leading apostrophe. A plain number is left alone: amounts are
+    stored as text, and the apostrophe used to turn every negative one (a loss, a cash debit) into text
+    that a spreadsheet would not add up."""
+    if (
+        isinstance(value, str)
+        and value.lstrip().startswith(("=", "+", "@", "-"))
+        and not PLAIN_NUMBER.fullmatch(value.strip())
+    ):
+        return "'" + value
+    return value
 LOCK = threading.Lock()
 LIMITER = RateLimit()
 
@@ -275,17 +291,7 @@ def dispatch(h, path, query, owner):
                         if not offset:
                             writer.writerow(batch[0])
                         for row in batch:
-                            writer.writerow(
-                                [
-                                    (
-                                        "'" + v
-                                        if isinstance(v, str)
-                                        and v.lstrip().startswith(("=", "+", "@", "-"))
-                                        else v
-                                    )
-                                    for v in row.values()
-                                ]
-                            )
+                            writer.writerow([export_cell(v) for v in row.values()])
                         offset += len(batch)
                 return h._send(
                     200,

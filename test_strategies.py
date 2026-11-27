@@ -489,7 +489,8 @@ class TestStrategiesWeb(unittest.TestCase):
         wait_idle(self.app.strategies)
         res = self.app.strategies.results()[0]
         self.assertEqual(res["status"], "ok")
-        page = self.req("GET", "/strategies")[1].decode()
+        # Finished runs are listed in the Run history panel, which the Strategies page loads on demand.
+        page = self.req("GET", "/strategies/history/panel")[1].decode()
         self.assertIn(f"/strategies/results/{res['id']}/", page)
         r, body = self.req("GET", f"/strategies/results/{res['id']}/")
         self.assertEqual(r.status, 200)
@@ -537,9 +538,11 @@ class TestStrategiesWeb(unittest.TestCase):
         self.assertEqual(res["status"], "ok")
         self.assertEqual(res["counts"]["BUY"], 2)
         self.assertEqual(sv._counts_text(res["counts"]), "2 buy")
-        page = self.req("GET", "/strategies")[1].decode()
-        row = page[page.index(f"/strategies/results/{res['id']}/") - 900:page.index(f"/strategies/results/{res['id']}/")]
-        self.assertIn("<td>2 buy</td>", row)
+        page = self.req("GET", "/strategies/history/panel?" + urllib.parse.urlencode({"rid": res["id"]}))[1].decode()
+        row = page[page.index("class='rh-selected'"):]
+        row = row[:row.index("</tr>")]
+        self.assertIn("<td>2 Buy</td>", row)
+        self.assertIn(f"/strategies/results/{res['id']}/signals.csv", row)
         view = self.req("GET", f"/strategies/results/{res['id']}/")[1].decode()
         sig = view[view.index("<h2>Signals</h2>"):view.index("<h2>Run details</h2>")]
         self.assertNotIn("No result table", sig)
@@ -692,7 +695,6 @@ class TestStrategiesWeb(unittest.TestCase):
         self.assertEqual(row["Candles"], "5-day")
         page = self.req("GET", "/strategies")[1].decode()
         self.assertIn("value='5'", page)  # the choice is remembered
-        self.assertIn("5-day candles</div>", page)  # shown in the results list
         view = self.req("GET", f"/strategies/results/{res['id']}/")[1].decode()
         self.assertIn("· Latest close · 5-day candles</span>", view)
         # minute candles need FinViz prices; this server uses Massive, so the run is daily with a note

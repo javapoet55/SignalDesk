@@ -78,6 +78,20 @@ class PaperTests(unittest.TestCase):
         )
         self.assertEqual(v["portfolio"]["cash"], "992.00")
 
+    def test_export_keeps_negative_amounts_as_numbers_and_still_blocks_formulas(self):
+        from paper_trading.web import export_cell
+
+        for number in ("-42.86", "-0.5", "-.5", "+3", "-1e-7", "0", "-100000.000001", " -7 "):
+            self.assertEqual(export_cell(number), number)
+        for formula in ("=1+1", "+cmd|' /C calc'!A0", "@SUM(A1)", "-1+1", "-A1", "--5", " =HYPERLINK(1)", "-", "-1,000"):
+            self.assertEqual(export_cell(formula), "'" + formula)
+        for other in ("AAPL", "Buy", "", None, 12, -3.5):
+            self.assertEqual(export_cell(other), other)
+        # A real buy: its cash debit is stored as text and must export as a number.
+        self.confirm(self.preview())
+        debit = self.db.records("alice", self.pid, "ledger", 1)[0]["delta"]
+        self.assertEqual((debit, export_cell(debit)), ("-20.00", "-20.00"))
+
     def test_validation(self):
         for args in [
             ("Sell", "shares", "1"),
