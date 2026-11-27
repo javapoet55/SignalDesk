@@ -483,7 +483,7 @@ def report(job, key, m, window):
         if info.get("skipped_symbols"):
             notes.append(skipped_note(info["skipped_symbols"]))
         if info.get("entry_basis") == "signal_close":
-            notes.append("Entries assume a fill at the closing price used to calculate the daily signal.")
+            notes.append("Entries assume a fill at the closing price of the signal bar.")
         if m.get("profit_target_pct"):
             notes.append(target_rule(info))
             if m.get("stop_loss_pct"):
@@ -573,7 +573,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         f"<input name='holds' list='vb-holds' value='{esc(holds)}' required "
         "title='Enter one holding period, or comma-separated periods to compare'></label>"
         f"<datalist id='vb-holds'>{presets}<option value='1,5,10'>Compare 1, 5 and 10 days</option></datalist>"
-        f"<label>Price bars<select name='candle_days' title='Bar size used to calculate the signals. "
+        f"<label>Price bars<select name='candle_days' aria-label='Price bars' aria-describedby='vb-bar-help' title='Bar size used to calculate the signals. "
         f"Longer bars need a date range and a strategy that supports them. Trades are always priced on daily bars.'>{bar_options}</select></label>"
         f"<input type='hidden' name='commission' value='{esc(commission)}'>"
         f"<label>Profit target (%)<input name='profit_target_pct' type='number' min='0' step='any' value='{esc(target)}' placeholder='Optional' "
@@ -595,7 +595,7 @@ def controls(runs, rid, info, symbols, enabled, fields):
         "</div></details>"
         "<button class='vb-run' type='submit'"
         + ("" if runs and enabled else " disabled")
-        + ">▶　Run Backtest</button></form>"
+        + ">▶　Run Backtest</button><small id='vb-bar-help' hidden aria-live='polite'></small></form>"
     )
 
 
@@ -733,17 +733,22 @@ targetField.addEventListener('input',syncHold);
 syncHold();
 const dates=form.querySelector('.vb-dates'), caption=dates.querySelector('summary span');
 const {start,end}=form.elements;
+const barField=form.elements.candle_days, barHelp=document.querySelector('#vb-bar-help');
 function updateRange(commit=false){
   let first=start.value, last=end.value;
   if(first && last && first>last){
     [first,last]=[last,first];
     if(commit){start.value=first;end.value=last}
   }
-  start.required=Boolean(last);
-  end.required=Boolean(first);
+  const multiDay=Number(barField.value)>1;
+  start.required=multiDay||Boolean(last);
+  end.required=multiDay||Boolean(first);
+  barHelp.hidden=!multiDay;
+  barHelp.textContent=multiDay?`Run Backtest to evaluate the signal at the close of every ${barField.value} trading sessions, starting with the first session in the date range. Exits are checked daily.`:'';
   caption.textContent=(first||last)?(first||'Start')+' – '+(last||'End')+' ▾':'Saved signal dates ▾';
 }
 updateRange();
+barField.addEventListener('change',()=>updateRange());
 dates.oninput=()=>updateRange();
 dates.addEventListener('toggle',()=>{if(!dates.open)updateRange(true)});
 const picker=form.querySelector('.vb-picker'), input=form.elements.symbols, chips=document.querySelector('#vb-chips');
@@ -805,6 +810,7 @@ CSS = """
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
 .vb-controls{display:grid;grid-template-columns:1.3fr 1.5fr .78fr .85fr .8fr .8fr 1.35fr auto;align-items:end;gap:16px;margin-bottom:16px}
+#vb-bar-help{grid-column:1/-1;color:var(--muted)}
 .vb-controls label,.vb-controls summary{display:grid;gap:6px;font-size:13px}.vb-controls :is(input,select),.vb-dates summary span{box-sizing:border-box;width:100%;min-width:0;font:inherit;font-size:14px;color:var(--sd-ink);background:var(--bg);border:1px solid var(--edge);border-radius:7px;height:38px;padding:8px 10px}
 .vb-app .vb-controls summary{padding:0;margin:0;color:var(--sd-ink);font-weight:400}
 .vb-app .vb-controls details{position:relative;margin:0;padding:0;border:0;background:none}

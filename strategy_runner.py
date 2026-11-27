@@ -443,19 +443,19 @@ def run_script(mod, path: Path, info: dict, a, out: Path) -> int:
     return code
 
 
-def _day_candles(history: dict, symbols, n: int) -> dict:
-    """Daily bars -> n-trading-day candles for `symbols`, keyed by each candle's last day.
-
-    Same rule as finviz_prices.day_candles: every ticker's newest candle ends on its last day and the
-    oldest days that do not fill a candle are left out."""
+def _day_candles(history: dict, symbols, n: int, sessions) -> dict:
+    """Aggregate consecutive blocks on a shared session grid, keyed by their closing date."""
     out: dict = {}
-    for sym in symbols:
-        bars = [(day, history[day][sym]) for day in sorted(history) if sym in history[day]]
-        for i in range(len(bars) % n, len(bars), n):
-            block = [bar for _, bar in bars[i:i + n]]
+    for i in range(0, len(sessions) - n + 1, n):
+        days = sessions[i:i + n]
+        prices = [history.get(day, {}) for day in days]
+        for sym in symbols:
+            if any(sym not in row for row in prices):
+                continue
+            block = [row[sym] for row in prices]
             highs = [float(b.get("h", max(b.get("o", b["c"]), b["c"]))) for b in block]
             lows = [float(b.get("l", min(b.get("o", b["c"]), b["c"]))) for b in block]
-            out.setdefault(bars[i + n - 1][0], {})[sym] = {
+            out.setdefault(days[-1], {})[sym] = {
                 "o": float(block[0].get("o", block[0]["c"])), "h": max(highs), "l": min(lows),
                 "c": float(block[-1]["c"]), "v": sum(float(b.get("v") or 0.0) for b in block)}
     return out
@@ -473,13 +473,22 @@ def replay_daily(a) -> int:
     symbols = a.symbol.split(",")
     universe = {s for prices in history.values() for s in prices}
     keys = {v5.cache_symbol(symbol, universe) for symbol in symbols}
-    dates = [d for d in sorted(history) if d <= a.asof and keys.issubset(history[d])]
-    dates = set(dates[-a.sessions :])
+    candle_days = getattr(a, "candle_days", None) or 1
+    if candle_days > 1:
+        # Align the first in-range candle to the start of the selected interval.
+        # Trim only incomplete warm-up and trailing blocks, even if the end date moves.
+        sessions = cache["replay_calendar"]
+        first = len(sessions) - a.sessions
+        dates = set(sessions[first:])
+        history = _day_candles(history, keys | ({"SPY"} & universe), candle_days,
+                               sessions[first % candle_days:])
+    else:
+        dates = [d for d in sorted(history) if d <= a.asof and keys.issubset(history[d])]
+        dates = set(dates[-a.sessions :])
     buys = {symbol: [] for symbol in symbols}
     evaluated = set()
     warmup_sessions = {}
     past = {}
-    candle_days = getattr(a, "candle_days", None) or 1
     for day in sorted(history):
         if day > a.asof:
             break
@@ -490,13 +499,8 @@ def replay_daily(a) -> int:
         if a.candle_label and isinstance(getattr(mod, "CANDLE_DAYS", None), int):
             mod.CANDLE_DAYS = 1
             mod.CANDLE_LABEL = a.candle_label
-        visible = past
-        if candle_days > 1:
-            # Rebuild the candles as they stood on this day, for the replayed symbols and the
-            # market benchmark only: every symbol in the snapshot would be far too slow.
-            visible = _day_candles(past, sorted(keys | ({"SPY"} & universe)), candle_days)
         rows = mod.finviz_signals(
-            symbols.copy(), day, {"tickers": cache.get("tickers", []), "history": visible}
+            symbols.copy(), day, {"tickers": cache.get("tickers", []), "history": past}
         )
         if not isinstance(rows, list):
             raise ValueError("The strategy did not return a signal list.")
@@ -522,7 +526,7 @@ def replay_daily(a) -> int:
                     buys[symbol].append(day)
         evaluated.update(set(symbols) - warming)
         for symbol in warming:
-            warmup_sessions[symbol] = warmup_sessions.get(symbol, 0) + 1
+            warmup_sessions[symbol] = warmup_sessions.get(symbol, 0) + candle_days
     signals = buys if len(symbols) > 1 else buys[symbols[0]]
     Path(a.output).write_text(json.dumps({"buys": signals, "days": sorted(dates), "warmup_sessions": warmup_sessions}))
     return 0

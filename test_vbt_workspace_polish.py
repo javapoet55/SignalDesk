@@ -28,13 +28,16 @@ class CandleBuilder(unittest.TestCase):
             for n in (2, 3, 5):
                 with self.subTest(count=count, n=n):
                     expected = finviz_prices.day_candles({"tickers": [], "history": history}, n)["history"]
-                    self.assertEqual(_day_candles(history, ["ABC", "SPY"], n), expected)
+                    days = sorted(history)[count % n:]
+                    self.assertEqual(_day_candles(history, ["ABC", "SPY"], n, days), expected)
 
-    def test_newest_candle_ends_on_the_last_day_and_missing_extremes_are_filled(self):
-        candles = _day_candles(self.history(7), ["ABC"], 3)
-        self.assertEqual(sorted(candles), ["2026-10-04", "2026-10-07"])  # day 1 does not fill a candle
-        self.assertEqual(candles["2026-10-07"]["ABC"], {"o": 5.0, "h": 9.0, "l": 4.0, "c": 8.0, "v": 30.0})
-        self.assertEqual(_day_candles(self.history(4), ["SPY"], 2)["2026-10-04"]["SPY"]["h"], 1.0)
+    def test_missing_prices_do_not_move_a_tickers_boundaries(self):
+        history = self.history(10)
+        del history["2026-10-03"]["ABC"]
+        candles = _day_candles(history, ["ABC", "SPY"], 4, sorted(history))
+        self.assertEqual(list(candles), ["2026-10-04", "2026-10-08"])
+        self.assertEqual(candles["2026-10-04"], {"SPY": {"o": 1., "h": 1., "l": 1., "c": 1., "v": 0.}})
+        self.assertEqual(candles["2026-10-08"]["ABC"], {"o": 5., "h": 10., "l": 4., "c": 9., "v": 40.})
 
 
 class ReplayOnLongerBars(unittest.TestCase):
@@ -43,29 +46,32 @@ class ReplayOnLongerBars(unittest.TestCase):
         "def finviz_signals(tickers, day, cache):\n"
         "    days = sorted(cache['history'])\n"
         "    assert days[-1] == day, (days[-1], day)                     # no bar from the future\n"
-        "    spans = [cache['history'][d]['ABC']['v'] for d in days]\n"
-        "    return [dict(Ticker='ABC', Status='BUY' if len(days) % 2 else 'WAIT', Bars=len(days), Span=spans[-1])]\n"
+        "    assert CANDLE_DAYS == 1  # cache already contains the requested candles\n"
+        "    assert all(cache['history'][d]['ABC']['v'] == int(CANDLE_LABEL) for d in days)\n"
+        "    return [dict(Ticker='ABC', Status='BUY')]\n"
     )
 
-    def run_replay(self, candle_days):
+    def run_replay(self, candle_days, asof="2026-07-14"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s.py").write_text(self.STRATEGY)
-            history = {f"2026-11-{d:02d}": {"ABC": {"o": 10, "h": 11, "l": 9, "c": 10, "v": 1}, "ZZZ": {"o": 1, "c": 1}}
-                       for d in range(2, 14)}
-            (root / "c.json").write_text(json.dumps({"history": history}))
-            args = SimpleNamespace(strategy=str(root / "s.py"), cache=str(root / "c.json"), symbol="ABC", asof="2026-11-13",
-                                   sessions=4, output=str(root / "out.json"), candle_label="x", candle_days=candle_days)
+            from paper_trading.market import exchange
+            sessions = [s.date().isoformat() for s in exchange().sessions_in_range("2026-06-22", asof)]
+            history = {d: {"ABC": {"o": 10, "h": 11, "l": 9, "c": 10, "v": 1}} for d in sessions}
+            (root / "c.json").write_text(json.dumps({"history": history, "replay_calendar": sessions}))
+            args = SimpleNamespace(strategy=str(root / "s.py"), cache=str(root / "c.json"), symbol="ABC", asof=asof,
+                                   sessions=sum(d >= "2026-07-01" for d in sessions), output=str(root / "out.json"),
+                                   candle_label=str(candle_days), candle_days=candle_days)
             replay_daily(args)
             return json.loads((root / "out.json").read_text())
 
-    def test_each_day_sees_candles_ending_that_day(self):
+    def test_signals_only_at_completed_closes_with_daily_prices_between(self):
         daily = self.run_replay(1)
-        three = self.run_replay(3)
-        self.assertEqual(daily["days"], three["days"])
-        # Daily: 9,10,11,12 bars visible -> BUY on odd counts. Three-day: 3,3,3,4 candles -> BUY, BUY, BUY, WAIT.
-        self.assertEqual(daily["buys"], ["2026-11-10", "2026-11-12"])
-        self.assertEqual(three["buys"], ["2026-11-10", "2026-11-11", "2026-11-12"])
+        self.assertEqual(daily["days"], daily["buys"])
+        four = self.run_replay(4)
+        self.assertEqual(daily["days"], four["days"])
+        self.assertEqual(four["buys"], ["2026-07-07", "2026-07-13"])
+        self.assertEqual(self.run_replay(4, asof="2026-07-10")["buys"], ["2026-07-07"])
 
     def test_command_line_accepts_one_to_five(self):
         from strategy_runner import main

@@ -261,6 +261,8 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
     expected = [d.date().isoformat() for d in calendar.sessions_in_range(first, last)]
     if not 4 <= len(expected) <= 252:
         raise ValueError(f"{first} – {last} contains {len(expected)} NYSE sessions. Choose a range with 4–252 sessions.")
+    if candle_days > len(expected):
+        raise ValueError(f"Choose at least {candle_days} NYSE sessions to complete a {candle_days}-day price bar.")
     symbols = [symbol] if isinstance(symbol, str) else symbol
     available = {ticker for prices in history.values() for ticker in prices}
     keys = {}
@@ -328,16 +330,16 @@ def calendar_replay(manager, meta, cache, history, symbol, start, end, *, ticker
         folder = Path(tmp)
         folder.chmod(0o755)
         snapshot = folder / "history.json"
-        snapshot.write_text(
-            json.dumps(
-                {
-                    "history": hist,
-                    "tickers": tickers
-                    if tickers is not None
-                    else json.loads(cache.read_text()).get("tickers", []),
-                }
-            )
-        )
+        replay_cache = {
+            "history": hist,
+            "tickers": tickers if tickers is not None else json.loads(cache.read_text()).get("tickers", []),
+        }
+        if candle_days > 1:
+            start_day = max(min(hist), calendar.first_session.date().isoformat())
+            replay_cache["replay_calendar"] = [
+                d.date().isoformat() for d in calendar.sessions_in_range(start_day, expected[-1])
+            ]
+        snapshot.write_text(json.dumps(replay_cache))
         snapshot.chmod(0o644)
         buys, days, version, warmup_sessions = replay(
             manager, dict(meta, asof=expected[-1]), snapshot, symbol, len(expected),

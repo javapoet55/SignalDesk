@@ -37,7 +37,7 @@ class RangeSubmission(unittest.TestCase):
                 json.dumps(dict(history=history, tickers=symbols))
             )
             (root / "strategy.py").write_text(
-                "def finviz_signals(tickers, day, cache):\n"
+                "CANDLE_DAYS = 1\ndef finviz_signals(tickers, day, cache):\n"
                 "    assert max(cache['history']) == day\n"
                 "    n = len(cache['history'])\n"
                 "    return [dict(Ticker=s, Status='ERROR', Error=f'Insufficient history ({n} candles); need at least 3')\n"
@@ -49,7 +49,7 @@ class RangeSubmission(unittest.TestCase):
                 scripts_dir=root,
                 mem_mb=512,
                 timeout=90,
-                meta=lambda: {"test": {"kind": "generic", "file": "strategy.py"}},
+                meta=lambda: {"test": {"kind": "generic", "file": "strategy.py", "candles": True}},
             )
 
             def run_fixture(args, *_):
@@ -86,6 +86,16 @@ class RangeSubmission(unittest.TestCase):
                             [b["day"] for b in bars if b["signal"]],
                             [d for d in days if s == "ANF" or d.endswith("10")],
                         )
+                submit(manager, dict(rid=rid, symbols="ALL", start=days[0], end=days[-1], candle_days="4",
+                                     holds="7", profit_target_pct="2", stop_loss_pct="5"), lambda _: symbols)
+                data = service.call_args.args[1]
+                self.assertEqual((data["candle_days"], data["holds"], data["entry_basis"]), (4, [7], "signal_close"))
+                self.assertEqual(data["warmup_sessions"], {"CCCC": 8})
+                self.assertEqual([b["day"] for b in data["series"]["ANF"]], days)
+                self.assertEqual([b["day"] for b in data["series"]["ANF"] if b["signal"]], days[3::4])
+                with self.assertRaisesRegex(ValueError, "at least 5 NYSE sessions"):
+                    submit(manager, dict(rid=rid, symbols="ALL", start=days[0], end=days[3], candle_days="5"),
+                           lambda _: symbols)
                 del history[days[2]]["CCCC"]
                 (folder / "history_cache.json").write_text(
                     json.dumps(dict(history=history))
