@@ -2903,16 +2903,13 @@ class Handler(BaseHTTPRequestHandler):
                         message = "" if jobs else "No historical simulations yet."
                     except ValueError:
                         message = "The backtest service is unavailable. Refresh to retry."
-                rows = "".join(f"<tr><td><a href='/vectorbt?job={html.escape(j['id'])}'>"
-                               f"{html.escape(j['strategy'])}</a></td><td>{html.escape(j['symbol'])}</td>"
-                               f"<td>{html.escape(j['status'])}</td><td>{html.escape(j['created'])}</td></tr>" for j in jobs)
                 return self._html(200, "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
                                   "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Backtest history</title>"
                                   + _THEME_INIT + f"<style>{_CSS}{_JOURNAL_DESIGN_CSS}</style></head><body class='journal-app'><main>"
-                                  + render_tabs("strategies") + studio.subnav("backtests") + "<h1>VectorBT PRO</h1>"
+                                  + render_tabs("vectorbt") + "<h1>Backtest history</h1>"
                                   "<p><a href='/vectorbt'>Open VectorBT PRO workspace</a> · Historical simulations · <a href='/strategies?tab=history'>Choose a strategy run to backtest</a></p>"
                                   "<div class='card wrap'>" + (message or "<table><thead><tr><th>Strategy</th><th>Symbols</th>"
-                                  "<th>Status</th><th>Created</th></tr></thead><tbody>" + rows + "</tbody></table>") + "</div></main></body></html>")
+                                  "<th>Status</th><th>Created</th></tr></thead><tbody>" + vb_workspace.history_rows(jobs) + "</tbody></table>") + "</div></main></body></html>")
             research = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})/copilot", path)
             if research and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
                 query = urllib.parse.parse_qs(parts.query)
@@ -3123,7 +3120,7 @@ class Handler(BaseHTTPRequestHandler):
     def _html(self, status: int, page: str) -> None:
         if self.path.startswith("/strategies/backtests/") and "<main>" in page:
             page = page.replace("</head>", _THEME_INIT + "</head>", 1).replace(
-                "<main>", "<main>" + render_tabs("vectorbt") + studio.subnav("backtests"), 1)
+                "<main>", "<main>" + render_tabs("vectorbt"), 1)
         self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
     def _journal_get(self, path: str, query: str) -> None:

@@ -3,7 +3,21 @@ import unittest
 from unittest.mock import patch
 
 import dow_benchmark
-from vectorbt_workspace import report_data, time_taken, trade_text
+from vectorbt_workspace import history_timestamp, report_data, time_taken, trade_text
+
+
+class BacktestHistoryTime(unittest.TestCase):
+    def test_pacific_dates_and_daylight_saving(self):
+        for value, expected in (
+            ("2026-11-27T00:52:11.587990+00:00", "26-NOV-2026 @ 16:52:11 PST"),
+            ("2026-07-01T05:01:02Z", "30-JUN-2026 @ 22:01:02 PDT"),
+            ("2026-11-01T08:30:00Z", "01-NOV-2026 @ 01:30:00 PDT"),
+            ("2026-11-01T09:30:00Z", "01-NOV-2026 @ 01:30:00 PST"),
+            ("2026-11-26", "26-NOV-2026"),
+            (None, "—"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(history_timestamp(value), expected)
 
 
 class BacktestDuration(unittest.TestCase):

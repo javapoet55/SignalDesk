@@ -4,8 +4,9 @@ import csv
 import io
 import re
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import backtests
 import dow_benchmark
@@ -14,14 +15,6 @@ from backtest_dashboard import CAPITAL, entry_label, fmt, result_html, target_ru
 from backtest_dashboard import e as esc
 from strategy_design import icon
 
-NAV = (
-    ("backtests", "Strategy Library", "/strategies"),
-    ("configure", "Run Configuration", "/strategies?tab=configure"),
-    ("calendar", "Scheduled Runs", "/strategies?tab=scheduled"),
-    ("history", "Run History", "/strategies?tab=history"),
-    ("backtests", "VectorBT PRO", "/vectorbt"),
-    ("settings", "Settings", "/strategies?tab=settings"),
-)
 POLL_SECONDS = 30  # How often a queued backtest's page reloads itself.
 POLL_LIMIT = 40    # Reloads before it stops: 20 minutes at 30 seconds.
 TRADE_HEADERS = [
@@ -305,6 +298,26 @@ def plot(days, values, benchmark=None, *, dow=None, draw=False, compact=False):
 
 def view_url(key, **params):
     return "/vectorbt?" + esc(urlencode({"job": key, **params}))
+
+
+def history_timestamp(value):
+    try:
+        if isinstance(value, str) and len(value) == 10:
+            return date.fromisoformat(value).strftime("%d-%b-%Y").upper()
+        stamp = datetime.fromisoformat(value)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        return stamp.astimezone(ZoneInfo("America/Los_Angeles")).strftime("%d-%b-%Y @ %H:%M:%S %Z").upper()
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+
+
+def history_rows(jobs):
+    return "".join(
+        f"<tr><td><a href='{view_url(j['id'])}'>{esc(j['strategy'])}</a></td><td>{esc(j['symbol'])}</td>"
+        f"<td>{esc(j['status'])}</td><td>{esc(history_timestamp(j.get('created')))}</td></tr>"
+        for j in jobs
+    )
 
 
 def links(key, m, choice):
@@ -669,27 +682,17 @@ def page(host, query, fields=None, error=""):
     if defaults and m:
         defaults.update(_start=m["start"], _end=m["end"], _hold=m["hold"])
     form = controls(runs, rid, defaults, symbols, enabled, fields or {})
-    tabs = "".join(
-        f"<a href='{url}'"
-        + (" aria-current='page'" if url == "/vectorbt" else "")
-        + f">{icon(key_)}{name}</a>"
-        for key_, name, url in NAV
-    )
-    history = "".join(
-        f"<tr><td><a href='{view_url(j['id'])}'>{esc(j['strategy'])}</a></td><td>{esc(j['symbol'])}</td>"
-        f"<td>{esc(j['status'])}</td><td>{esc(j['created'])}</td></tr>"
-        for j in jobs
-    )
     html = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>VectorBT PRO Backtesting · Finviz Agent</title>"
         + server._THEME_INIT
         + f"<style>{server._CSS}{server._JOURNAL_DESIGN_CSS}</style></head><body class='journal-app vb-app'><main>"
         + server.render_tabs("vectorbt")
-        + f"<style>{CSS}</style><nav class='studio-tabs' aria-label='Strategies Studio'>{tabs}</nav>"
+        + f"<style>{CSS}</style>"
         f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>VectorBT PRO Backtesting</h1>"
         "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div>"
-        f"<p class='vb-capital'>Initial capital <strong>{fmt(CAPITAL, 'usd')[:-3]}</strong></p></header>"
+        "<div class='vb-heading-tools'><a class='vb-history-link' href='/strategies/backtests'>Backtest history</a>"
+        f"<p class='vb-capital'>Initial capital <strong>{fmt(CAPITAL, 'usd')[:-3]}</strong></p></div></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
         + (coverage_options(error, fields) if fields and isinstance(error, backtests.ReplayCoverageError) else "")
         + form
@@ -697,9 +700,9 @@ def page(host, query, fields=None, error=""):
         + "<details class='vb-card vb-history' id='saved-backtests'><summary>Saved backtest history</summary>"
         + (
             "<table><thead><tr><th>Strategy</th><th>Symbols</th><th>Status</th><th>Created</th></tr></thead><tbody>"
-            + history
+            + history_rows(jobs)
             + "</tbody></table>"
-            if history
+            if jobs
             else "<p>No saved backtests available.</p>"
         )
         + "</details></div></main><script>"
@@ -797,7 +800,8 @@ CSS = """
 .vb-app{--green:var(--accent);--red:var(--down);--benchmark:#82a4b7;--dow:#c88720;--edge:var(--sd-line)}
 .vb-content{min-width:0}
 .vb-recovery{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.vb-recovery form{margin:0}
-.vb-heading .vb-capital{margin:0 0 0 auto;text-align:right;color:var(--sd-muted);font-size:13px;white-space:nowrap}.vb-heading .vb-capital strong{display:block;font-size:19px;color:var(--sd-ink)}
+.vb-heading-tools{margin-left:auto;display:flex;align-items:center;gap:20px}.vb-heading .vb-capital{margin:0;text-align:right;color:var(--sd-muted);font-size:13px;white-space:nowrap}.vb-heading .vb-capital strong{display:block;font-size:19px;color:var(--sd-ink)}
+.vb-history-link{display:inline-block;white-space:nowrap;padding:8px 14px;border:1px solid var(--edge);border-radius:8px;color:var(--green);font-weight:600}.vb-history-link:hover,.vb-history-link:focus-visible{border-color:var(--green);text-decoration:underline}
 .vb-heading{display:flex;align-items:center;gap:17px;margin:0 0 18px}.vb-heading>.sd-icon{width:38px;height:38px;color:var(--green)}.vb-heading h1{margin:0;font-size:29px;line-height:1.2;letter-spacing:-.8px}.vb-heading p{margin:3px 0 0;color:var(--sd-muted)}
 .vb-card{background:linear-gradient(110deg,var(--sd-card),color-mix(in srgb,var(--sd-card) 88%,var(--bg)));border:1px solid var(--edge);border-radius:13px;box-sizing:border-box;padding:12px 16px;min-width:0}
 .vb-controls{display:grid;grid-template-columns:1.3fr 1.5fr .78fr .85fr .8fr .8fr 1.35fr auto;align-items:end;gap:16px;margin-bottom:16px}
@@ -822,5 +826,6 @@ CSS = """
 .vb-action{display:block;text-align:center;border:1px solid var(--edge);border-radius:8px;padding:10px;color:var(--sd-ink);margin:8px 0;font-weight:600}.vb-action:first-of-type{border-color:var(--green);color:var(--green);background:var(--jsoft)}.vb-textlink{display:block;text-align:center;margin:12px 0 0}.vb-history{margin-top:16px;overflow:auto}.vb-history summary{cursor:pointer;font-weight:600}
 @media(max-width:1200px){.vb-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.vb-kpis{gap:8px}.vb-kpi{padding:10px;gap:6px}.vb-kpi .sd-icon{padding:4px}}
 @media(max-width:850px){.vb-grid{grid-template-columns:minmax(0,1fr)}.vb-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.vb-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.vb-heading{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px}.vb-heading-tools{grid-column:1/-1;margin:0;justify-content:space-between}}
 @media(max-width:510px){.vb-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.vb-kpi{min-height:75px}.vb-kpi strong{font-size:21px}.vb-heading h1{font-size:23px}.vb-heading .sd-icon{width:28px}.vb-stats{display:block}.vb-stats dl:first-child{border:0;padding:0}.vb-controls{gap:9px}.vb-ranges{margin-left:0}}
 """

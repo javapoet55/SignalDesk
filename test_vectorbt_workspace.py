@@ -85,7 +85,7 @@ class WorkspaceFlow(unittest.TestCase):
                         "id": key,
                         "strategy": "daily",
                         "symbol": "ABC",
-                        "created": days[-1],
+                        "created": "2026-11-27T00:52:11.587990+00:00",
                         "status": "Completed",
                     }
                 ]
@@ -115,6 +115,15 @@ class WorkspaceFlow(unittest.TestCase):
             page.locator("[name=password]").fill("pw-123")
             page.locator("form.login-form button[type=submit]").click()
             page.locator(".studio-rail").get_by_text("VectorBT PRO").click()
+            page.locator("#saved-backtests summary").click()
+            self.assertEqual(page.locator("#saved-backtests tbody td").last.inner_text(), "26-NOV-2026 @ 16:52:11 PST")
+            page.get_by_role("link", name="Backtest history", exact=True).click()
+            page.get_by_role("heading", name="Backtest history", exact=True).wait_for()
+            self.assertEqual(page.locator(".card.wrap tbody td").last.inner_text(), "26-NOV-2026 @ 16:52:11 PST")
+            self.assertEqual(page.locator(".studio-tabs").count(), 0)
+            self.assertEqual(page.locator(".studio-rail nav [aria-current=page]").inner_text(), "VectorBT PRO")
+            page.get_by_role("link", name="daily", exact=True).click()
+            page.wait_for_url(f"**/vectorbt?job={key}")
             self.assertEqual(page.locator("svg.vb-plot").count(), 2)
             self.assertEqual(page.locator(".vb-kpi").count(), 5)
             self.assertEqual(page.locator("svg.vb-plot").first.locator("polyline").count(), 3)

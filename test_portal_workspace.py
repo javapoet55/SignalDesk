@@ -87,17 +87,21 @@ class PortalWorkspaceTests(unittest.TestCase):
                 page.goto(base + "/")
                 rail = page.locator("#studio-rail")
                 expected = rail.locator("nav a").all_text_contents()
-                for label, module_tabs in (("Strategies", "Strategy workspace"), ("VectorBT PRO", "Strategies Studio"), ("Paper Trading", "Paper trading")):
+                for label, module_tabs in (("Strategies", "Strategy workspace"), ("VectorBT PRO", None), ("Paper Trading", "Paper trading")):
                     if width < 761:
                         page.get_by_role("button", name="Menu").click()
                     rail.get_by_role("link", name=label, exact=True).click()
                     self.assertEqual(rail.locator("nav a").all_text_contents(), expected)
                     self.assertEqual(rail.locator("[aria-current=page]").inner_text(), label)
-                    local_tabs = page.get_by_role("navigation", name=module_tabs, exact=True)
-                    self.assertTrue(local_tabs.is_visible())
+                    if module_tabs:
+                        section_control = page.get_by_role("navigation", name=module_tabs, exact=True)
+                    else:
+                        self.assertEqual(page.locator(".studio-tabs").count(), 0)
+                        section_control = page.get_by_role("link", name="Backtest history", exact=True)
+                    self.assertTrue(section_control.is_visible())
                     if width > 760:
                         self.assertTrue(rail.is_visible())
-                        self.assertLessEqual(rail.bounding_box()["x"] + rail.bounding_box()["width"], local_tabs.bounding_box()["x"])
+                        self.assertLessEqual(rail.bounding_box()["x"] + rail.bounding_box()["width"], section_control.bounding_box()["x"])
                     self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width + 1)
                     if os.getenv("STUDIO_SCREENSHOTS"):
                         page.screenshot(path=str(Path(os.environ["STUDIO_SCREENSHOTS"]) / f"navigation-{width}-{label}.png"))
