@@ -87,7 +87,7 @@ class ResultsSummary(unittest.TestCase):
     def test_replay_notes_wait_for_a_finished_backtest(self):
         basket = dict(symbols=["ABC", "XYZ"], warmup_sessions={"ABC": 3})
         self.assertEqual(summary(replay_job(result=False, **basket)),
-                         "Queued or running. This page checks for the result every few seconds.")
+                         "Queued or running. This page refreshes every 30 seconds until the result is ready.")
         self.assertEqual(
             summary(replay_job(result=False, error="All symbols must cover the same sessions.", **basket)),
             "All symbols must cover the same sessions.",

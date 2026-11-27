@@ -36,6 +36,8 @@ class Replay(BacktestRequest):
     source: str = Field(default="Archived signals", max_length=64)
     warmup_sessions: dict[str, Annotated[int, Field(ge=1, le=252)]] = Field(default_factory=dict, max_length=5000)
     observed_days: int = Field(ge=1, le=3000)
+    skipped_symbols: dict[str, Annotated[str, Field(max_length=10)]] = Field(default_factory=dict, max_length=5000)
+    candle_days: int = Field(default=1, ge=1, le=5)
 
 
 class Research(Replay):
@@ -57,9 +59,9 @@ class SessionPrices(BaseModel):
 
 
 class Cohort(BacktestRequest):
-    target_days: list[str] = Field(default_factory=list, max_length=7)
-    completed_sessions: int = Field(default=0, ge=0, le=7)
-    target_bars: dict[str, Annotated[list[SessionPrices], Field(max_length=7)]] = Field(default_factory=dict, max_length=5000)
+    target_days: list[str] = Field(default_factory=list, max_length=60)
+    completed_sessions: int = Field(default=0, ge=0, le=60)
+    target_bars: dict[str, Annotated[list[SessionPrices], Field(max_length=60)]] = Field(default_factory=dict, max_length=5000)
     source: str
     session_highs: dict[str, Annotated[list[FiniteFloat | None], Field(max_length=252)]] = Field(default_factory=dict, max_length=5000)
     close_marks: dict[str, FiniteFloat | None] = Field(

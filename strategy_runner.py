@@ -443,6 +443,24 @@ def run_script(mod, path: Path, info: dict, a, out: Path) -> int:
     return code
 
 
+def _day_candles(history: dict, symbols, n: int) -> dict:
+    """Daily bars -> n-trading-day candles for `symbols`, keyed by each candle's last day.
+
+    Same rule as finviz_prices.day_candles: every ticker's newest candle ends on its last day and the
+    oldest days that do not fill a candle are left out."""
+    out: dict = {}
+    for sym in symbols:
+        bars = [(day, history[day][sym]) for day in sorted(history) if sym in history[day]]
+        for i in range(len(bars) % n, len(bars), n):
+            block = [bar for _, bar in bars[i:i + n]]
+            highs = [float(b.get("h", max(b.get("o", b["c"]), b["c"]))) for b in block]
+            lows = [float(b.get("l", min(b.get("o", b["c"]), b["c"]))) for b in block]
+            out.setdefault(bars[i + n - 1][0], {})[sym] = {
+                "o": float(block[0].get("o", block[0]["c"])), "h": max(highs), "l": min(lows),
+                "c": float(block[-1]["c"]), "v": sum(float(b.get("v") or 0.0) for b in block)}
+    return out
+
+
 def replay_daily(a) -> int:
     """Evaluate a generic strategy on a fixed symbol list, revealing daily history incrementally."""
     path = Path(a.strategy)
@@ -461,6 +479,7 @@ def replay_daily(a) -> int:
     evaluated = set()
     warmup_sessions = {}
     past = {}
+    candle_days = getattr(a, "candle_days", None) or 1
     for day in sorted(history):
         if day > a.asof:
             break
@@ -471,8 +490,13 @@ def replay_daily(a) -> int:
         if a.candle_label and isinstance(getattr(mod, "CANDLE_DAYS", None), int):
             mod.CANDLE_DAYS = 1
             mod.CANDLE_LABEL = a.candle_label
+        visible = past
+        if candle_days > 1:
+            # Rebuild the candles as they stood on this day, for the replayed symbols and the
+            # market benchmark only: every symbol in the snapshot would be far too slow.
+            visible = _day_candles(past, sorted(keys | ({"SPY"} & universe)), candle_days)
         rows = mod.finviz_signals(
-            symbols.copy(), day, {"tickers": cache.get("tickers", []), "history": past}
+            symbols.copy(), day, {"tickers": cache.get("tickers", []), "history": visible}
         )
         if not isinstance(rows, list):
             raise ValueError("The strategy did not return a signal list.")
@@ -517,6 +541,7 @@ def main(argv=None) -> int:
         replay.add_argument("--"+key, required=True)
     replay.add_argument("--sessions", type=int, choices=range(4, 253), required=True)
     replay.add_argument("--candle-label")
+    replay.add_argument("--candle-days", type=int, choices=range(1, 6), default=1)
     a = ap.parse_args(argv)
     try:
         if a.cmd == "replay":
