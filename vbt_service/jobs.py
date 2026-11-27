@@ -50,8 +50,19 @@ def lookup(key: UUID):
         return dict(inputs=row[0], result=row[1], error=row[2], elapsed_seconds=row[3]) if row else None
 
 
-def work():
+def run_request(request):
+    """Backtests go to the engine. Indicator requests go to their own module and never touch it."""
+    if request.get("kind") == "indicators":
+        from .indicators import compute
+
+        return compute(request)
     from .engine import calculate
+
+    return calculate(request)
+
+
+def work():
+    from .engine import calculate  # noqa: F401  Fail at start-up, not on the first job, if the runtime is missing.
 
     initialize()
     while True:
@@ -62,7 +73,7 @@ def work():
                 key, request = row
                 result, error = None, None
                 try:
-                    result = Jsonb(calculate(request))
+                    result = Jsonb(run_request(request))
                 except Exception as exc:
                     error = str(exc)[:300]
                 # The transaction starts before calculate(). Use the clock at completion.

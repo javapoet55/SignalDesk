@@ -5,7 +5,9 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
+
+from . import indicators as indicator_rules
 from . import jobs
 
 
@@ -73,6 +75,40 @@ class Cohort(BacktestRequest):
     prices: dict[str, list[FiniteFloat | None]] = Field(min_length=1, max_length=5000)
 
 
+class IndicatorBar(BaseModel):
+    day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    open: FiniteFloat | None = Field(default=None, gt=0)
+    high: FiniteFloat | None = Field(default=None, gt=0)
+    low: FiniteFloat | None = Field(default=None, gt=0)
+    close: FiniteFloat = Field(gt=0)
+    volume: FiniteFloat | None = Field(default=None, ge=0)
+
+
+class IndicatorSpec(BaseModel):
+    name: str = Field(max_length=20)
+    params: dict[Annotated[str, Field(max_length=20)], FiniteFloat] = Field(default_factory=dict, max_length=4)
+
+    @model_validator(mode="after")
+    def known(self):
+        self.params = indicator_rules.normalize(self.name, self.params)
+        return self
+
+
+class IndicatorRequest(BaseModel):
+    """Indicators on saved daily prices. Stored beside backtests but never listed or run as one."""
+
+    kind: Literal["indicators"]
+    price_run: str = Field(max_length=200)
+    source: str = Field(max_length=64)
+    display_from: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    preparation_seconds: FiniteFloat = Field(default=0, ge=0)
+    indicators: list[IndicatorSpec] = Field(min_length=1, max_length=indicator_rules.MAX_INDICATORS)
+    series: dict[
+        Annotated[str, Field(pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")],
+        Annotated[list[IndicatorBar], Field(min_length=2, max_length=indicator_rules.MAX_BARS)],
+    ] = Field(min_length=1, max_length=indicator_rules.MAX_SYMBOLS)
+
+
 def authorized(authorization: str = Header(default="")):
     if not secrets.compare_digest(
         authorization.encode(), ("Bearer " + os.environ["VBT_SERVICE_TOKEN"]).encode()
@@ -104,12 +140,20 @@ def submit(data: Research | BasketResearch | Cohort):
     return jobs.submit(uuid4(), request)
 
 
+@app.post("/indicators", dependencies=[Depends(authorized)], status_code=202)
+def submit_indicators(data: IndicatorRequest):
+    request = data.model_dump()
+    request["symbols"] = list(data.series)
+    return jobs.submit(uuid4(), request)
+
+
 @app.get("/jobs", dependencies=[Depends(authorized)])
 def history():
     with jobs.database() as db:
         rows = db.execute("""SELECT id, request->>'strategy', request->>'symbol', created,
                            CASE WHEN error IS NOT NULL THEN 'Failed' WHEN result IS NULL THEN 'Queued or running'
-                           ELSE 'Completed' END FROM vbt_research ORDER BY created DESC LIMIT 100""").fetchall()
+                           ELSE 'Completed' END FROM vbt_research
+                           WHERE request->>'kind' IS DISTINCT FROM 'indicators' ORDER BY created DESC LIMIT 100""").fetchall()
     return [
         dict(
             id=str(key),

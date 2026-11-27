@@ -721,7 +721,8 @@ def page(host, query, fields=None, error=""):
         + f"<style>{CSS}</style>"
         f"<div class='vb-content'><header class='vb-heading'>{icon('backtests')}<div><h1>VectorBT PRO Backtesting</h1>"
         "<p>Run and analyze historical backtests for your trading strategies using VectorBT PRO.</p></div>"
-        "<div class='vb-heading-tools'><a class='vb-history-link' href='/strategies/backtests'>Backtest history</a>"
+        "<div class='vb-heading-tools'><a class='vb-history-link' href='/vectorbt/indicators'>Indicators</a>"
+        "<a class='vb-history-link' href='/strategies/backtests'>Backtest history</a>"
         f"<p class='vb-capital'>Initial capital <strong>{fmt(CAPITAL, 'usd')[:-3]}</strong></p></div></header>"
         + (f"<p role='alert' class='warn'>{esc(error)}</p>" if error else "")
         + (coverage_options(error, fields) if fields and isinstance(error, backtests.ReplayCoverageError) else "")

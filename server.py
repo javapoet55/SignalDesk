@@ -75,6 +75,7 @@ import notebook as nb
 import portal_workspace as studio
 import strategy_settings
 import run_history
+import vbt_indicators
 import vectorbt_workspace as vb_workspace
 import strategy_design as design
 import open_trade_marks as otm  # noqa: E402  interactive journal performance explorer
@@ -2894,6 +2895,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/vectorbt":
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
                 return vb_workspace.page(self, query)
+            if path == "/vectorbt/indicators":
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
+                return vbt_indicators.page(self, query)
             if path == "/vectorbt/compare":
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(parts.query).items()}
                 return vb_workspace.compare(self, query)
@@ -2988,7 +2992,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(303, b"", "text/plain; charset=utf-8",
                               {"Location": "/login?signed_out=1", "Set-Cookie": self._session_cookie("logged-out")})
         upload_routes = ("/strategies/upload", "/strategies/mcap", "/journal/import")
-        form_routes = ("/vectorbt/run", "/strategies/copilot", "/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
+        form_routes = ("/vectorbt/run", "/vectorbt/indicators/run", "/strategies/copilot", "/notebook/save", "/notes/save", "/run", "/scans/go", "/scans/schedule/cancel", "/presets/add", "/presets/remove", "/presets/keep",
                        "/presets/topn",
                        "/strategies/delete",
                        "/strategies/backtest", "/strategies/results/delete", "/strategies/tvlink", "/strategies/cancel", "/strategies/note", "/strategies/run",
@@ -3059,6 +3063,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/vectorbt?job=" + keys[0])
             except (ValueError, OSError) as err:
                 return vb_workspace.page(self, {}, fields, err)
+        if path == "/vectorbt/indicators/run":
+            fields = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True).items()}
+            try:
+                if not (os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN")):
+                    raise ValueError("VectorBT PRO is not configured.")
+                return self._redirect("/vectorbt/indicators?job=" + vbt_indicators.submit(self.app.strategies, fields))
+            except (ValueError, OSError) as err:
+                return vbt_indicators.page(self, {}, fields, str(err))
         if path == "/strategies/copilot":
             form = {k:v[0] for k,v in urllib.parse.parse_qs(raw.decode("utf-8",errors="replace"),keep_blank_values=True).items()}
             return self._research_copilot(form.get("job",""), form.get("hold",""), form=form)
