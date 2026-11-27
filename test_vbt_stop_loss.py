@@ -156,9 +156,9 @@ class PortalInput(unittest.TestCase):
 
     def test_form_field_and_recovery_keep_the_stop(self):
         form = vb.controls([], "", {}, [], True, dict(profit_target_pct="2", stop_loss_pct="10"))
-        self.assertIn("name='stop_loss_pct' type='number' min='0' max='99.99' step='any' value='10'", form)
+        self.assertIn("name='stop_loss_pct' inputmode='decimal' pattern='" + vb.PERCENT_LIST + "' value='10'", form)
         saved = vb.controls([], "", dict(profit_target_pct=2.0, stop_loss_pct=10.0), [], True, {})
-        self.assertIn("name='stop_loss_pct' type='number' min='0' max='99.99' step='any' value='10.0'", saved)
+        self.assertIn("name='stop_loss_pct' inputmode='decimal' pattern='" + vb.PERCENT_LIST + "' value='10.0'", saved)
         error = SimpleNamespace(common_range=("2026-10-02", "2026-10-09"), covered_symbols=[], symbol_count=2,
                                 requested_range=("2026-10-01", "2026-10-09"))
         self.assertIn("name='stop_loss_pct' value='10'", vb.coverage_options(error, dict(rid="r", stop_loss_pct="10")))

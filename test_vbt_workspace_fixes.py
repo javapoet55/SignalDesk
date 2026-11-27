@@ -188,11 +188,23 @@ class PortalRoutes(unittest.TestCase):
         symbols = ",".join(f"T{i:04d}" for i in range(4000))
         form = dict(rid="2026-10-30_160000_daily", symbols=symbols, holds="5", commission="0.1",
                     start="2026-07-01", end="2026-10-30")
-        with patch("backtests.service", return_value=[]), patch("vectorbt_workspace.submit", return_value=KEY) as submit:
+        with patch("backtests.service", return_value=[]), patch("vectorbt_workspace.submit_all", return_value=[KEY]) as submit:
             response, _ = self.server.request("POST", "/vectorbt/run", form=form, headers=self.origin)
         self.assertEqual(response.status, 303)
         self.assertEqual(response.getheader("Location"), "/vectorbt?job=" + KEY)
         self.assertEqual(submit.call_args.args[1]["symbols"], symbols)
+        # Several profit targets or stop losses come back as several jobs and open the comparison.
+        others = [KEY[:-1] + "2", KEY[:-1] + "3"]
+        with patch("backtests.service", return_value=[]), patch("vectorbt_workspace.submit_all", return_value=others):
+            response, _ = self.server.request("POST", "/vectorbt/run", form=dict(form, symbols="ABC"), headers=self.origin)
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader("Location"), "/vectorbt/compare?jobs=" + ",".join(others))
+        with patch("backtests.service", side_effect=backtests.JobNotFound("gone")):
+            response, body = self.server.request("GET", "/vectorbt/compare?jobs=" + ",".join(others))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body.decode().count("<td>Not found</td>"), 2)
+        response, _ = self.server.request("GET", "/vectorbt/compare?jobs=" + KEY)
+        self.assertEqual(response.status, 400)
         form["symbols"] = "X" * 200000
         response, _ = self.server.request("POST", "/vectorbt/run", form=form, headers=self.origin)
         self.assertEqual(response.status, 413)
