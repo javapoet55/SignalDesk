@@ -74,7 +74,7 @@ def stop_loss(value):
     return stop
 
 
-MAX_COMPARISONS = 12  # Profit target and stop loss pairings tested by one submit.
+MAX_COMPARISONS = 20  # Profit target and stop loss pairings tested by one submit.
 
 
 def percent_values(value, parse):

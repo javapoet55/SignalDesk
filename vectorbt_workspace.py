@@ -18,6 +18,7 @@ from strategy_design import icon
 
 POLL_SECONDS = 30  # How often a queued backtest's page reloads itself.
 POLL_LIMIT = 40    # Reloads before it stops: 20 minutes at 30 seconds.
+COMPARE_POLL_LIMIT = 120  # A comparison runs up to 20 backtests one after another: 60 minutes.
 TRADE_HEADERS = [
     "Symbol",
     "Side",
@@ -550,7 +551,8 @@ def report(job, key, m, window):
 
 
 # One percentage or a comma-separated list, as an HTML pattern. The server does the real validation.
-PERCENT_LIST = r"\s*\d*\.?\d+\s*(,\s*\d*\.?\d+\s*)*"
+# A comma left at the end is accepted and ignored.
+PERCENT_LIST = r"\s*\d*\.?\d+\s*(,\s*\d*\.?\d+\s*)*,?\s*"
 
 
 def controls(runs, rid, info, symbols, enabled, fields):
@@ -889,7 +891,7 @@ def compare(host, query):
             else ""
         )
         + "</div></main><script>"
-        + f"const VB_PENDING={'true' if pending else 'false'},VB_POLL_MS={int(POLL_SECONDS * 1000)},VB_POLL_LIMIT={POLL_LIMIT};"
+        + f"const VB_PENDING={'true' if pending else 'false'},VB_POLL_MS={int(POLL_SECONDS * 1000)},VB_POLL_LIMIT={COMPARE_POLL_LIMIT};"
         + COMPARE_SCRIPT
         + "</script></body></html>"
     )

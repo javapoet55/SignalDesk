@@ -11,7 +11,7 @@ import vectorbt_workspace as vb
 from test_vbt_auto_refresh import DONE, INFO, KEY, LiveServer, sync_playwright
 from test_vbt_stop_loss import DAYS, EngineResults, engine
 
-KEYS = [f"abc00000-0000-0000-0000-{n:012d}" for n in range(1, 13)]
+KEYS = [f"abc00000-0000-0000-0000-{n:012d}" for n in range(1, 21)]
 
 
 class Parsing(unittest.TestCase):
@@ -39,9 +39,9 @@ class Parsing(unittest.TestCase):
         self.assertEqual(pairs([2.0, 4.0], [3.0, 10.0]), [(2.0, 3.0), (2.0, 10.0), (4.0, 3.0), (4.0, 10.0)])
         with self.assertRaisesRegex(ValueError, "Enter a profit target to use a stop loss"):
             pairs([], [5.0])
-        self.assertEqual(len(pairs([1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0])), 12)
-        with self.assertRaisesRegex(ValueError, r"3 profit targets with 5 stop losses is 15 backtests\. Compare at most 12"):
-            pairs([1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertEqual(len(pairs([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0, 5.0])), 20)
+        with self.assertRaisesRegex(ValueError, r"3 profit targets with 7 stop losses is 21 backtests\. Compare at most 20"):
+            pairs([1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
 
 
 class Submission(unittest.TestCase):
@@ -107,7 +107,7 @@ class Submission(unittest.TestCase):
 
     def test_rejections_happen_before_any_work(self):
         for fields, message in ((dict(stop_loss_pct="3,5"), "Enter a profit target to use a stop loss"),
-                                (dict(profit_target_pct="1,2,3,4", stop_loss_pct="1,2,3,4"), "is 16 backtests"),
+                                (dict(profit_target_pct="1,2,3,4,5", stop_loss_pct="1,2,3,4,5"), "is 25 backtests"),
                                 (dict(profit_target_pct="2,x"), "positive profit target")):
             with self.subTest(fields=fields):
                 err, sent, prepared = self.submit(**fields)
@@ -226,7 +226,7 @@ class Page(Table):
         html = page["html"]
         self.assertIn("<h1>Compare profit targets and stop losses</h1>", html)
         self.assertIn("The highlighted row has the highest expectancy", html)
-        self.assertIn("const VB_PENDING=false,VB_POLL_MS=30000,VB_POLL_LIMIT=40;", html)
+        self.assertIn("const VB_PENDING=false,VB_POLL_MS=30000,VB_POLL_LIMIT=120;", html)
         self.assertEqual(html.count("class=vb-best"), 1)
 
     def test_running_comparison_refreshes(self):
@@ -266,9 +266,9 @@ class Form(unittest.TestCase):
         self.assertIn("id='vb-compare-help'", html)
         import re
         pattern = re.search(r"name='stop_loss_pct' inputmode='decimal' pattern='([^']+)'", html).group(1)
-        for good in ("2", "2.5", " 2, 4 ", ".5,10"):
+        for good in ("2", "2.5", " 2, 4 ", ".5,10", "5,2,3,4,", "2, 4 , "):
             self.assertTrue(re.fullmatch(pattern, good), good)
-        for bad in ("abc", "2;4", "2,", "-1"):
+        for bad in ("abc", "2;4", ",2", "2,,4", ",", "-1"):
             self.assertFalse(re.fullmatch(pattern, bad), bad)
 
     def test_saved_single_values_still_prefill(self):
@@ -317,8 +317,11 @@ class Browser(unittest.TestCase):
             page.locator("[name=stop_loss_pct]").fill("3,5,10")
             self.assertIn("Compare 6 Backtests", button.inner_text())
             self.assertIn("Runs 6 backtests on the same signals and prices", help_text.inner_text())
-            page.locator("[name=stop_loss_pct]").fill("1,2,3,4,5,6,7")
-            self.assertIn("That is 14 backtests. Compare at most 12 at a time.", help_text.inner_text())
+            page.locator("[name=stop_loss_pct]").fill("1,2,3,4,5,6,7,8,9,10,11")
+            self.assertIn("That is 22 backtests. Compare at most 20 at a time.", help_text.inner_text())
+            page.locator("[name=stop_loss_pct]").fill("2,3,4,5,")       # a comma left at the end is fine
+            self.assertTrue(page.locator("[name=stop_loss_pct]").evaluate("field => field.checkValidity()"))
+            self.assertIn("Compare 8 Backtests", button.inner_text())
             page.locator("[name=stop_loss_pct]").fill("3,x")          # the browser blocks a malformed list
             self.assertFalse(page.locator("[name=stop_loss_pct]").evaluate("field => field.checkValidity()"))
             page.locator("[name=stop_loss_pct]").fill("")
