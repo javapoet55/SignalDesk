@@ -152,6 +152,17 @@ def replay_failure(log, mem_mb):
 MAX_CANDLE_DAYS = 5
 
 
+def compare_bars(value):
+    """Bar sizes to compare, from a comma-separated list such as "1, 2, 4". Blank gives an empty list."""
+    sizes = []
+    for part in (value or "").split(","):
+        if part.strip():
+            days = candle_days(part)
+            if days not in sizes:
+                sizes.append(days)
+    return sizes
+
+
 def candle_days(value):
     """Trading days per price bar used to compute signals: blank or 1 is daily."""
     text = (value or "").strip()
