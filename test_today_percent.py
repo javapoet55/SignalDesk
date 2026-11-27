@@ -18,5 +18,5 @@ class TestTodayPercent(unittest.TestCase):
   s.app.open_marks=SimpleNamespace(snapshot=lambda trades:({'AAA':dict(price=98,day='2026-11-02',fetched=time.time(),stale=False,today_pct=-2), 'BBB':dict(price=105,day='2026-11-02',fetched=time.time(),stale=False,today_pct=5)},False))
   page=server.render_journal_trades(s.app,{'from':'','to':'','sort':'today_pct','direction':'desc'})
   self.assertIn('Today %',page);self.assertIn('+5.00%',page);self.assertIn('-2.00%',page)
-  self.assertLess(page.index('Sort by Symbol'),page.index('Sort by Today %'));self.assertLess(page.index('Sort by Today %'),page.index('Sort by Side'))
+  self.assertLess(page.index('Sort by Symbol'),page.index('Sort by Today %'));self.assertLess(page.index('Sort by Today %'),page.index('Sort by Shares'))
   self.assertLess(page.index('<strong>BBB'),page.index('<strong>AAA'))

@@ -412,6 +412,7 @@ class StrategyManager:
         self.sandbox_error = self._preflight()
         if self.sandbox_error:
             log(f"WARNING: strategies cannot run: {self.sandbox_error}")
+        self._close_interrupted()
         self._jobs: "queue.Queue[dict]" = queue.Queue()
         self._queue_lock = threading.Lock()
         self._cancel_event = threading.Event()
@@ -419,6 +420,28 @@ class StrategyManager:
         self.queued: List[dict] = []
         self._worker = threading.Thread(target=self._work, daemon=True)
         self._worker.start()
+
+    def _close_interrupted(self) -> None:
+        """At start-up no run can be in progress, so a result still marked "running" was cut off by a
+        restart or redeploy. Close it; otherwise it shows as running for ever and cannot be deleted."""
+        for folder in self.results_dir.iterdir():
+            try:
+                if folder.is_symlink() or not folder.is_dir() or not RESULT_RE.match(folder.name):
+                    continue
+                if read_meta(folder).get("status") != "running":
+                    continue
+                seal_result_dir(folder)  # it may still belong to the sandbox user
+                meta = read_meta(folder)
+                if meta.get("status") != "running":
+                    continue
+                meta.update(status="error", finished_utc=utc_now().isoformat(timespec="seconds"),
+                            error="Interrupted by a server restart")
+                _atomic_json(folder / "meta.json", meta)
+                with (folder / "output.txt").open("a", encoding="utf-8") as fh:
+                    fh.write("\nStopped: the server restarted while this run was in progress. Run it again.\n")
+                self.log(f"strategy run {folder.name}: closed after a restart")
+            except OSError as err:
+                self.log(f"could not close interrupted run {folder.name}: {err}")
 
     def _preflight(self) -> Optional[str]:
         """Prove the locked-down process can start, read the runner and reach the scripts folder."""
@@ -816,6 +839,20 @@ class StrategyManager:
                         fh.write("\nStopped by user.\n")
             except Exception as err:  # never let the worker die
                 self.log(f"strategy run failed: {type(err).__name__}: {err}")
+                # Close the result as well: it was left marked "running" for ever.
+                rid = (self.current or {}).get("result_id")
+                try:
+                    folder = self.results_dir / rid if rid else None
+                    meta = read_meta(folder) if folder else {}
+                    if meta.get("status") == "running":
+                        seal_result_dir(folder)
+                        meta.update(status="error", finished_utc=utc_now().isoformat(timespec="seconds"),
+                                    error=f"{type(err).__name__}: {err}"[:300])
+                        _atomic_json(folder / "meta.json", meta)
+                        with (folder / "output.txt").open("a", encoding="utf-8") as fh:
+                            fh.write(f"\nStopped by an unexpected error: {type(err).__name__}: {err}\n")
+                except OSError as failure:
+                    self.log(f"could not close failed run {rid}: {failure}")
             finally:
                 with self._queue_lock:
                     self.current = None

@@ -353,7 +353,7 @@ def match_trades(fills: List[dict]) -> List[dict]:
                     cur = {"id": "f" + f["id"], "symbol": symbol, "side": "long" if remaining > 0 else "short",
                            "entry_time": f["when"], "has_time": f["has_time"], "exit_time": None,
                            "opened": 0.0, "open_value": 0.0, "closed": 0.0, "close_value": 0.0,
-                           "gross": 0.0, "fees": 0.0, "fill_ids": [], "source": "import"}
+                           "gross": 0.0, "fees": 0.0, "fill_ids": [], "fill_shares": {}, "source": "import"}
                     trades.append(cur)
                     pos, avg = 0.0, 0.0
                 same_dir = (pos >= 0 and remaining > 0) or (pos <= 0 and remaining < 0)
@@ -378,6 +378,7 @@ def match_trades(fills: List[dict]) -> List[dict]:
                         cur["has_time"] = cur["has_time"] and f["has_time"]
                 cur["remaining_basis"] = avg
                 cur["fees"] += fee_per_share * q
+                cur["fill_shares"][f["id"]] = cur["fill_shares"].get(f["id"], 0.0) + q
                 if not cur["fill_ids"] or cur["fill_ids"][-1] != f["id"]:
                     cur["fill_ids"].append(f["id"])  # a fill that flips the position is in both trades
         # trades left open keep exit_time None
@@ -397,7 +398,7 @@ def match_trades(fills: List[dict]) -> List[dict]:
             "return_pct": round(pnl / (entry * qty) * 100, 4) if closed and entry * qty else None,
             "status": "closed" if closed else "open", "has_time": t["has_time"], "source": "import",
             "open_qty": None if closed else round(t["opened"] - t["closed"], 6),
-            "fill_ids": t["fill_ids"],
+            "fill_ids": t["fill_ids"], "fill_shares": t["fill_shares"],
             "mark_basis": t.get("remaining_basis", entry), "realized_gross": t["gross"],
         })
     return out
@@ -735,8 +736,12 @@ class JournalStore:
                                "leave both empty for an open trade.")
         if exit_price is not None and (exit_price <= 0 or exit_price > 1e7):
             raise JournalError("Enter the exit price (more than 0).")
-        if exit_time is not None and exit_time < entry_time:
-            raise JournalError("The exit is before the entry.")
+        if exit_time is not None:
+            # Compare whole days unless both have a time: '2026-10-30' sorts before '2026-10-30 09:31:00'
+            # as text, which wrongly refused a same-day exit entered without a time.
+            timed = len(entry_time) > 10 and len(exit_time) > 10
+            if (exit_time < entry_time) if timed else (exit_time[:10] < entry_time[:10]):
+                raise JournalError("The exit is before the entry.")
         fees = parse_number(form.get("fees")) or 0.0
         if fees < 0 or fees > 1e7:
             raise JournalError("Fees can't be negative.")
@@ -799,9 +804,19 @@ class JournalStore:
                 manual = [m for m in _read_json(self.manual_path, []) if m["id"] != trade_id]
                 _write_json(self.manual_path, manual)
             else:
-                fills = _read_json(self.fills_path, [])
-                mine = set(t["fill_ids"])
-                _write_json(self.fills_path, [f for f in fills if f["id"] not in mine])
+                # A fill that flipped the position (long to short in one order) is shared with the
+                # next trade. Only this trade's shares of it are removed; the rest stay for that trade.
+                used = t.get("fill_shares") or {fid: None for fid in t["fill_ids"]}
+                kept = []
+                for f in _read_json(self.fills_path, []):
+                    if f["id"] not in used:
+                        kept.append(f)
+                        continue
+                    share = used[f["id"]]
+                    left = 0.0 if share is None else f["qty"] - share
+                    if left > EPS:
+                        kept.append({**f, "qty": round(left, 6), "fees": round(f["fees"] * left / f["qty"], 6)})
+                _write_json(self.fills_path, kept)
             notes = self.notes()
             if notes.pop(trade_id, None) is not None:
                 _write_json(self.notes_path, notes)
