@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, FiniteFloat, model_validator
 
 from . import indicators as indicator_rules
 from . import jobs
+from .performance import performance
 
 
 class Bar(BaseModel):
@@ -150,20 +151,26 @@ def submit_indicators(data: IndicatorRequest):
 @app.get("/jobs", dependencies=[Depends(authorized)])
 def history():
     with jobs.database() as db:
-        rows = db.execute("""SELECT id, request->>'strategy', request->>'symbol', created,
-                           CASE WHEN error IS NOT NULL THEN 'Failed' WHEN result IS NULL THEN 'Queued or running'
-                           ELSE 'Completed' END FROM vbt_research
-                           WHERE request->>'kind' IS DISTINCT FROM 'indicators' ORDER BY created DESC LIMIT 100""").fetchall()
-    return [
-        dict(
-            id=str(key),
-            strategy=strategy,
-            symbol=symbol,
-            created=created,
-            status=status,
-        )
-        for key, strategy, symbol, created, status in rows
-    ]
+        # Project only the request fields used for scoring. The historical price series stays in Postgres.
+        rows = db.execute("""
+            SELECT id, created, cfg.strategy, cfg.symbol, to_jsonb(cfg),
+                   CASE WHEN error IS NOT NULL THEN 'Failed' WHEN result IS NULL THEN 'Queued or running'
+                        ELSE 'Completed' END, CASE WHEN error IS NULL THEN result END
+            FROM (SELECT id, created, request, result, error FROM vbt_research
+                  WHERE request->>'kind' IS DISTINCT FROM 'indicators'
+                  ORDER BY created DESC, id DESC LIMIT 100) recent
+            CROSS JOIN LATERAL jsonb_to_record(recent.request) AS cfg(
+                strategy text, symbol text, profit_target_pct float8, exit_on_target boolean,
+                dates jsonb, close_marks jsonb, fee_bps float8)
+            ORDER BY created DESC, id DESC
+        """).fetchall()
+    items = []
+    for key, created, strategy, symbol, info, status, result in rows:
+        summary = performance(info, result) if result else None
+        items.append(dict(id=str(key), strategy=strategy, symbol=symbol, created=created, status=status,
+                          win_rate_pct=summary.win_rate_pct if summary else None,
+                          total_return_pct=summary.total_return_pct if summary else None))
+    return items
 
 
 @app.get("/runs/{run}/latest-backtest", dependencies=[Depends(authorized)])

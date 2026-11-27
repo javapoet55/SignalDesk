@@ -357,12 +357,15 @@ def history_timestamp(value):
         return "—"
 
 
-def history_rows(jobs):
-    return "".join(
+def history_table(jobs):
+    rows = "".join(
         f"<tr><td><a href='{view_url(j['id'])}'>{esc(j['strategy'])}</a></td><td>{esc(j['symbol'])}</td>"
+        f"<td>{fmt(j.get('win_rate_pct'), 'pct')}</td><td>{fmt(j.get('total_return_pct'), 'pct')}</td>"
         f"<td>{esc(j['status'])}</td><td>{esc(history_timestamp(j.get('created')))}</td></tr>"
         for j in jobs
     )
+    return ("<table><thead><tr><th>Strategy</th><th>Symbols</th><th>Win Rate %</th><th>Total Return %</th>"
+            f"<th>Status</th><th>Created</th></tr></thead><tbody>{rows}</tbody></table>")
 
 
 def links(key, m, choice):
@@ -760,9 +763,7 @@ def page(host, query, fields=None, error=""):
         + report(job, key, m, query.get("window", "All"))
         + "<details class='vb-card vb-history' id='saved-backtests'><summary>Saved backtest history</summary>"
         + (
-            "<table><thead><tr><th>Strategy</th><th>Symbols</th><th>Status</th><th>Created</th></tr></thead><tbody>"
-            + history_rows(jobs)
-            + "</tbody></table>"
+            history_table(jobs)
             if jobs
             else "<p>No saved backtests available.</p>"
         )

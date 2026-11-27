@@ -2915,8 +2915,7 @@ class Handler(BaseHTTPRequestHandler):
                                   + _THEME_INIT + f"<style>{_CSS}{_JOURNAL_DESIGN_CSS}</style></head><body class='journal-app'><main>"
                                   + render_tabs("vectorbt") + "<h1>Backtest history</h1>"
                                   "<p><a href='/vectorbt'>Open VectorBT PRO workspace</a> · Historical simulations · <a href='/strategies?tab=history'>Choose a strategy run to backtest</a></p>"
-                                  "<div class='card wrap'>" + (message or "<table><thead><tr><th>Strategy</th><th>Symbols</th>"
-                                  "<th>Status</th><th>Created</th></tr></thead><tbody>" + vb_workspace.history_rows(jobs) + "</tbody></table>") + "</div></main></body></html>")
+                                  "<div class='card wrap'>" + (message or vb_workspace.history_table(jobs)) + "</div></main></body></html>")
             research = re.fullmatch(r"/strategies/backtests/([0-9a-f-]{36})/copilot", path)
             if research and os.environ.get("VBT_SERVICE_URL") and os.environ.get("VBT_SERVICE_TOKEN"):
                 query = urllib.parse.parse_qs(parts.query)

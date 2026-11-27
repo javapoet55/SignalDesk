@@ -6,7 +6,8 @@ import math
 import statistics
 from datetime import date
 
-CAPITAL = 100000
+from vbt_service.performance import CAPITAL, performance
+
 CSS = """
 :root{color-scheme:dark;--bg:#0a1019;--panel:#121d2c;--edge:#293649;--text:#e6eef6;--muted:#a5b4c5;--green:#61dcac;--red:#ff897f;--gold:#e7be75}
 :root[data-theme=light]{color-scheme:light;--bg:#f4f7f7;--panel:white;--edge:#cfdddf;--text:#142c33;--muted:#4a626a;--green:#14775b;--red:#ab3b46;--gold:#85601d}
@@ -214,7 +215,6 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     rows = []
     row_pnl = []
     row_values = []  # Unformatted entry price, exit price, net P/L and return for exports.
-    row_hits = []
     row_reasons = []  # "target", "stop" or "time" where the engine reported why a trade closed.
     fills = []
     benchmark = None
@@ -224,12 +224,13 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         holds = info["holds"]
         hold = next((v for v in holds if str(v) == hold_choice), holds[0])
         idx = holds.index(hold)
+    summary = performance(info, result, idx if batch else 0)
+    days, equity = summary.days, summary.equity
+    if batch:
         start, end = info["dates"][0], info["dates"][idx + 1]
         outcomes = result["outcomes"]
         prices = info.get("prices", {})
         allocation = CAPITAL / len(outcomes)
-        days = []
-        equity = []
         for sym, values in sorted(outcomes.items()):
             v = values[idx]
             quotes = prices.get(sym, [None] * len(info["dates"]))
@@ -238,9 +239,6 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
             pnl = allocation * v / 100 if complete else None
             row_pnl.append(pnl)
             row_values.append((buy, sell, pnl, v if complete else None))
-            if target is not None:
-                hits = result.get("target_hits", {}).get(sym)
-                row_hits.append(hits[idx] if hits else None)
             exit_day, duration = end, hold
             if info.get("exit_on_target"):
                 fill = result["target_fills"].get(sym, {})
@@ -261,21 +259,6 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
                     (f"{duration} sessions" if info.get("exit_on_target") else "Closed") if complete else v,
                 ]
             )
-        marks = info.get("close_marks", {})
-        for day, ratio in sorted(marks.items()):
-            if day >= end:
-                break
-            if ratio is None:
-                days = []
-                equity = []
-                break
-            days.append(day)
-            equity.append(CAPITAL * ratio / (1 + info["fee_bps"] / 10000))
-        if info.get("exit_on_target"):
-            days, equity = result["days"], result["equity"]
-        elif len(fills) == len(outcomes) and days:
-            days.append(end)
-            equity.append(CAPITAL + sum(t["pnl"] for t in fills))
         context = (
             "<div class='switch'>Holding period "
             + "".join(
@@ -295,8 +278,6 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         net = sum(t["pnl"] for t in fills) if n else None
     else:
         full = result["full_period"]
-        days = result["days"]
-        equity = full["equity"]
         start, end = days[0], days[-1]
         fills = full.get("fills", [])
         n = full["trades"]
@@ -306,8 +287,6 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
         for t in fills:
             row_pnl.append(t["pnl"])
             row_values.append((t["buy"], t["sell"], t["pnl"], t["pct"]))
-            if target is not None:
-                row_hits.append(t.get("target_hit"))
             row_reasons.append(t.get("exit_reason"))
             rows.append(
                 [
@@ -379,28 +358,19 @@ def result_html(job, refresh_path, hold_choice="", *, metrics_only=False):
     pnl = [t["pnl"] for t in fills]
     wins = [v for v in pnl if v > 0]
     losses = [v for v in pnl if v < 0]
-    row_groups = []
-    for index, value in enumerate(row_pnl):
-        if value is None:
-            group = "pending"
-        elif target is not None:
-            group = {True: "wins", False: "losses", None: "unscored"}[row_hits[index]]
-        else:
-            group = "wins" if value > 0 else "losses" if value < 0 else "flat"
-        row_groups.append(group)
-        if target is not None:
+    row_groups = summary.trade_groups
+    if target is not None:
+        for index, group in enumerate(row_groups):
             stopped = index < len(row_reasons) and row_reasons[index] == "stop"
             rows[index].append("Stopped" if stopped and group == "losses" else
                                {"wins": "Hit", "losses": "Missed", "unscored": "High unavailable", "pending": "—"}[group])
     stop_count = sum(reason == "stop" for reason in row_reasons)
     win_count, loss_count = row_groups.count("wins"), row_groups.count("losses")
     unscored = row_groups.count("unscored")
-    scored = len(fills) - unscored
-    total = 100 * (equity[-1] / CAPITAL - 1) if equity else None
-    if batch and len(fills) == len(result["outcomes"]):
-        total = net / CAPITAL * 100
+    scored = summary.scored
+    total = summary.total_return_pct
     maxdd = min(dd) if dd else None
-    rate = 100 * win_count / scored if scored else None
+    rate = summary.win_rate_pct
     annual = None
     sharpe = None
     if len(equity) > 1:

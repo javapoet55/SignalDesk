@@ -3,7 +3,8 @@ import unittest
 from unittest.mock import patch
 
 import dow_benchmark
-from vectorbt_workspace import history_timestamp, report_data, time_taken, trade_text
+from vectorbt_workspace import history_table, history_timestamp, report_data, time_taken, trade_text
+from vbt_service.performance import performance
 
 
 class BacktestHistoryTime(unittest.TestCase):
@@ -18,6 +19,34 @@ class BacktestHistoryTime(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertEqual(history_timestamp(value), expected)
+
+
+class BacktestHistoryPerformance(unittest.TestCase):
+    def test_replay_scores_only_known_target_outcomes(self):
+        result = {"full_period": {"equity": [100000, 97000], "fills": [
+            {"pnl": 100, "target_hit": True}, {"pnl": 50, "target_hit": False},
+            {"pnl": -10, "target_hit": None}]}}
+        stats = performance({"profit_target_pct": 2}, result)
+        self.assertEqual(stats.win_rate_pct, 50)
+        self.assertAlmostEqual(stats.total_return_pct, -3)
+        ordinary = performance({}, result)
+        self.assertAlmostEqual(ordinary.win_rate_pct, 200 / 3)
+
+    def test_buy_basket_defaults_to_first_hold_and_keeps_partial_valuations(self):
+        info = {"dates": ["2026-07-01", "2026-07-02", "2026-07-09"],
+                "fee_bps": 0, "close_marks": {"2026-07-01": 1.01}}
+        result = {"outcomes": {"A": [0, 10], "B": ["Pending exit", -2]}}
+        first = performance(info, result)
+        self.assertEqual(first.win_rate_pct, 0)
+        self.assertAlmostEqual(first.total_return_pct, 1)
+        second = performance(info, result, 1)
+        self.assertEqual((second.win_rate_pct, second.total_return_pct), (50, 4))
+
+    def test_missing_and_zero_are_distinct(self):
+        job = dict(id="test", strategy="daily", symbol="AAA", status="Queued or running")
+        self.assertIn("<td>—</td><td>—</td><td>Queued or running", history_table([job]))
+        job.update(status="Completed", win_rate_pct=None, total_return_pct=0)
+        self.assertIn("<td>—</td><td>0.00%</td><td>Completed", history_table([job]))
 
 
 class BacktestDuration(unittest.TestCase):

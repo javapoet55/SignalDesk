@@ -87,6 +87,8 @@ class WorkspaceFlow(unittest.TestCase):
                         "symbol": "ABC",
                         "created": "2026-11-27T00:52:11.587990+00:00",
                         "status": "Completed",
+                        "win_rate_pct": 100.0,
+                        "total_return_pct": 4.69,
                     }
                 ]
             return {"inputs": req, "result": result, "error": None, "elapsed_seconds": 30.1}
@@ -116,10 +118,14 @@ class WorkspaceFlow(unittest.TestCase):
             page.locator("form.login-form button[type=submit]").click()
             page.locator(".studio-rail").get_by_text("VectorBT PRO").click()
             page.locator("#saved-backtests summary").click()
-            self.assertEqual(page.locator("#saved-backtests tbody td").last.inner_text(), "26-NOV-2026 @ 16:52:11 PST")
+            columns = ["Strategy", "Symbols", "Win Rate %", "Total Return %", "Status", "Created"]
+            row = ["daily", "ABC", "100.00%", "4.69%", "Completed", "26-NOV-2026 @ 16:52:11 PST"]
+            self.assertEqual(page.locator("#saved-backtests th").all_inner_texts(), columns)
+            self.assertEqual(page.locator("#saved-backtests tbody td").all_inner_texts(), row)
             page.get_by_role("link", name="Backtest history", exact=True).click()
             page.get_by_role("heading", name="Backtest history", exact=True).wait_for()
-            self.assertEqual(page.locator(".card.wrap tbody td").last.inner_text(), "26-NOV-2026 @ 16:52:11 PST")
+            self.assertEqual(page.locator(".card.wrap th").all_inner_texts(), columns)
+            self.assertEqual(page.locator(".card.wrap tbody td").all_inner_texts(), row)
             self.assertEqual(page.locator(".studio-tabs").count(), 0)
             self.assertEqual(page.locator(".studio-rail nav [aria-current=page]").inner_text(), "VectorBT PRO")
             page.get_by_role("link", name="daily", exact=True).click()
